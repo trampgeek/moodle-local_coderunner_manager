@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/coderunner_manager/db" VERSION="20261105" COMMENT="CodeRunner prototype manager tables."
+>
+  <TABLES>
+    <TABLE NAME="local_coderunner_manager_prototypes" COMMENT="One row per CodeRunner question prototype. Holds the prototype's identity and scope; its content lives in the versions table.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="The label authors see. Unique among a course's prototypes and all site prototypes taken together, which is enforced in code because the site part cannot be expressed as an index."/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="The course the prototype belongs to. SITEID for a site prototype. Scope decides who may edit it and who is offered it, and plays no part in running a question."/>
+        <FIELD NAME="uuid" TYPE="char" LENGTH="36" NOTNULL="true" SEQUENCE="false" COMMENT="A stable identifier created with the prototype and kept through export, backup and restore, so copies of the same prototype elsewhere can be recognised. Not unique on a site: a restore that cannot use the original creates a copy carrying the same identifier."/>
+        <FIELD NAME="builtin" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True for a prototype shipped with CodeRunner, which each release reinstalls and which authors cannot edit."/>
+        <FIELD NAME="issitedefaults" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True for the single Site defaults prototype that sits at the root of every chain. Unlike a built-in it is created once and never rewritten by an upgrade, because site administrators edit it; and it cannot be deleted."/>
+        <FIELD NAME="currentversionid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The version that questions and child prototypes resolve against. Null only in the moment between inserting a prototype and inserting its first version, inside one transaction."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="usercreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+        <KEY NAME="currentversionid" TYPE="foreign" FIELDS="currentversionid" REFTABLE="local_coderunner_manager_versions" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid-name" UNIQUE="true" FIELDS="courseid, name"/>
+        <INDEX NAME="uuid" UNIQUE="false" FIELDS="uuid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_coderunner_manager_versions" COMMENT="One row per saved version of a prototype. Each row is complete; differences between versions are computed for display, not stored.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="prototypeid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="version" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Counts from 1 within each prototype."/>
+        <FIELD NAME="parentid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The prototype this version derives from, or null for a root. The parent belongs to the version rather than the prototype, so a prototype whose parent changed still shows its earlier versions correctly."/>
+        <FIELD NAME="overrides" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="A JSON document of the field values this prototype sets. A field absent from the document is inherited; a field present with any value, including an empty string, is an override."/>
+        <FIELD NAME="summary" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="One sentence, shown in the prototype picker."/>
+        <FIELD NAME="documentation" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Documentation for question authors, shown in the question form once this prototype is chosen. Takes over the role the question text of a prototype question plays in CodeRunner 5."/>
+        <FIELD NAME="commitmessage" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="An optional note from the author describing the change."/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="prototypeid" TYPE="foreign" FIELDS="prototypeid" REFTABLE="local_coderunner_manager_prototypes" REFFIELDS="id"/>
+        <KEY NAME="parentid" TYPE="foreign" FIELDS="parentid" REFTABLE="local_coderunner_manager_prototypes" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="prototypeid-version" UNIQUE="true" FIELDS="prototypeid, version"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
