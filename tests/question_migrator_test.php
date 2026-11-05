@@ -146,7 +146,7 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
      * resumed and the task can run on every upgrade.
      */
     public function test_migration_is_idempotent(): void {
-        $this->make_question_with_prototype();
+        $this->unmigrate($this->make_question_with_prototype());
         $migrator = new question_migrator();
 
         $first = $migrator->migrate();
@@ -166,6 +166,7 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
         global $DB;
 
         $question = $this->make_plain_question('no_such_prototype');
+        $this->unmigrate($question);
         (new question_migrator())->migrate();
 
         $row = $DB->get_record('question_coderunner_options', ['questionid' => $question->id]);
@@ -181,6 +182,7 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
         global $DB;
 
         $question = $this->make_question_with_prototype();
+        $this->unmigrate($question);
         $before = $DB->get_record('question_coderunner_options', ['questionid' => $question->id]);
 
         (new question_migrator())->migrate();
@@ -193,6 +195,45 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
             $this->assertSame($value, $after->$field, "The migration changed the $field column.");
         }
         $this->assertNotNull($after->prototypeid);
+    }
+
+    /**
+     * A question saved after the upgrade is converted by the question type as
+     * it is written, so the migration finds nothing left to do.
+     *
+     * This is why every test above calls unmigrate() first: without it a
+     * fixture built through the form arrives already converted, and a test of
+     * the migration would pass without the migration having run.
+     */
+    public function test_a_question_saved_after_the_upgrade_needs_no_migration(): void {
+        global $DB;
+
+        $question = $this->make_question_with_prototype();
+
+        $row = $DB->get_record('question_coderunner_options', ['questionid' => $question->id]);
+        $this->assertNotNull($row->prototypeid, 'The save path records the prototype reference.');
+        $this->assertNotNull($row->overrides);
+
+        $counts = (new question_migrator())->migrate();
+        $this->assertSame(0, $counts['converted']);
+        $this->assertSame(0, $counts['broken']);
+    }
+
+    /**
+     * Return a question's options row to the state CodeRunner 5 left it in.
+     *
+     * The question type records the prototype reference whenever a question is
+     * saved, so a fixture built through the form is already converted. The
+     * migration exists for rows written before 6.0, so a test of it has to
+     * recreate that state deliberately.
+     *
+     * @param object $question the question whose row to reset.
+     */
+    private function unmigrate(object $question): void {
+        global $DB;
+
+        $DB->set_field('question_coderunner_options', 'prototypeid', null, ['questionid' => $question->id]);
+        $DB->set_field('question_coderunner_options', 'overrides', null, ['questionid' => $question->id]);
     }
 
     /**

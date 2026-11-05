@@ -135,6 +135,34 @@ class prototype_repository {
     }
 
     /**
+     * The prototype of the given name that a course's questions resolve against.
+     *
+     * A name is unique among one course's prototypes and all site prototypes
+     * taken together, which {@see name_clash()} enforces, so this returns at
+     * most one prototype and needs no tie-break. A course prototype cannot
+     * shadow a site one, because the name would have been refused.
+     *
+     * This is the lookup the question type uses when it has only a name to go
+     * on: a question saved through the CodeRunner 5 form, a legacy import, or
+     * a restore whose prototype id could not be mapped.
+     *
+     * @param string $name the prototype name.
+     * @param int $courseid the course whose questions are asking.
+     * @return prototype|null the prototype, or null if the course cannot see
+     *      one of that name.
+     */
+    public function find_by_name_for_course(string $name, int $courseid): ?prototype {
+        global $DB;
+
+        $record = $DB->get_record_select(
+            self::PROTOTYPES,
+            'name = :name AND (courseid = :courseid OR courseid = :siteid)',
+            ['name' => $name, 'courseid' => $courseid, 'siteid' => SITEID]
+        );
+        return $record ? $this->prototype_from_record($record) : null;
+    }
+
+    /**
      * The prototypes whose current version derives from the given one.
      *
      * @param int $id the parent prototype's id.
