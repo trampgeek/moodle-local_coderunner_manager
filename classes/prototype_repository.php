@@ -181,6 +181,40 @@ class prototype_repository {
     }
 
     /**
+     * Every prototype descended from the given one, however deep.
+     *
+     * The parent picker uses this to leave out the choices that would make a
+     * cycle. save_new_version() rejects a cycle outright, which is the
+     * backstop; this is so an author is never offered a parent that will be
+     * refused.
+     *
+     * @param int $id the prototype whose descendants are wanted.
+     * @return int[] the descendants' ids.
+     */
+    public function descendant_ids(int $id): array {
+        $found = [];
+        $frontier = [$id];
+
+        // Breadth first, with a visited set: restored data can contain a cycle,
+        // and this must not be the thing that hangs on it.
+        while ($frontier) {
+            $next = [];
+            foreach ($frontier as $parentid) {
+                foreach ($this->children_of($parentid) as $child) {
+                    if ($child->id === $id || in_array($child->id, $found, true)) {
+                        continue;
+                    }
+                    $found[] = $child->id;
+                    $next[] = $child->id;
+                }
+            }
+            $frontier = $next;
+        }
+
+        return $found;
+    }
+
+    /**
      * Whether a name may be used for a prototype in the given scope.
      *
      * A name must be unique among one course's prototypes and all site

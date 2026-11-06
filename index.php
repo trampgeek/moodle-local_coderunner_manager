@@ -56,6 +56,15 @@ echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('prototypelist', 'local_coderunner_manager'));
 echo html_writer::tag('p', get_string('prototypelist_intro', 'local_coderunner_manager'));
 
+echo html_writer::div(
+    html_writer::link(
+        new moodle_url('/local/coderunner_manager/edit.php', ['courseid' => $courseid ?: SITEID]),
+        get_string('newprototype', 'local_coderunner_manager'),
+        ['class' => 'btn btn-primary']
+    ),
+    'mb-3'
+);
+
 if (!$prototypes) {
     echo $OUTPUT->notification(get_string('noprototypesyet', 'local_coderunner_manager'), 'notifymessage');
     echo $OUTPUT->footer();
@@ -66,6 +75,38 @@ if (!$prototypes) {
 $childrenof = [];
 foreach ($prototypes as $prototype) {
     $childrenof[$prototype->parentid() ?? 0][] = $prototype;
+}
+
+/**
+ * The links offered against one prototype.
+ *
+ * A built-in is rewritten by every CodeRunner release, so editing one would
+ * lose the change; Site defaults is the exception, since it exists to be
+ * edited. Either way a child can be made, which is the supported way to build
+ * on a built-in.
+ *
+ * @param prototype $prototype the prototype.
+ * @return string[] the rendered links.
+ */
+function prototype_actions(prototype $prototype): array {
+    $links = [];
+
+    if (!$prototype->builtin || $prototype->issitedefaults) {
+        $links[] = html_writer::link(
+            new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
+            get_string('edit')
+        );
+    }
+
+    $links[] = html_writer::link(
+        new moodle_url('/local/coderunner_manager/edit.php', [
+            'courseid' => $prototype->courseid,
+            'parentid' => $prototype->id,
+        ]),
+        get_string('makechild', 'local_coderunner_manager')
+    );
+
+    return $links;
 }
 
 /**
@@ -112,6 +153,7 @@ function print_prototype_row(
     echo html_writer::tag('td', $counts['questions'] ?: '');
     echo html_writer::tag('td', $counts['children'] ?: '');
     echo html_writer::tag('td', s($version ? $version->summary : ''));
+    echo html_writer::tag('td', implode(' ', prototype_actions($prototype)));
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
@@ -121,7 +163,7 @@ function print_prototype_row(
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
+foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary', 'actions'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');
