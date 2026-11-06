@@ -582,6 +582,33 @@ class prototype_repository {
     }
 
     /**
+     * The file areas a question's support files are merged from, root first.
+     *
+     * Only the locations, not the files. The question type reads the files
+     * themselves through the file API on the attempt path, where decision 16
+     * forbids touching the prototype tables; resolving the locations here means
+     * that walk happens once per questiondata cache entry instead of once per
+     * attempt.
+     *
+     * @param int $prototypeid the prototype a question uses.
+     * @return array list of ['contextid' => int, 'itemid' => int], root first.
+     */
+    public function file_areas_for(int $prototypeid): array {
+        $areas = [];
+        foreach ($this->chain_prototypes($prototypeid) as $prototype) {
+            $version = $prototype->currentversion;
+            if ($version === null) {
+                continue;
+            }
+            $areas[] = [
+                'contextid' => $this->file_contextid($prototype),
+                'itemid' => $version->id,
+            ];
+        }
+        return $areas;
+    }
+
+    /**
      * Copy files into a version's file area from another area.
      *
      * The file API stores content by hash, so copying a file that is already
