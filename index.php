@@ -100,10 +100,22 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
     $name = s($prototype->name);
 
     // A built-in is rewritten by every release, so it is not a link: editing it
-    // would lose the change. Site defaults is the exception, since it exists to
-    // be edited.
+    // would lose the change.
     if ($prototype->builtin && !$prototype->issitedefaults) {
         return $indent . $name;
+    }
+
+    // Site defaults sits under every question on the server, so it is editable
+    // only from the site prototypes page, where the surrounding text says what
+    // the consequences are. Offering the same link from a course page invites
+    // an administrator to change every course while thinking about one.
+    global $COURSE;
+    if ($prototype->issitedefaults && $COURSE->id != SITEID) {
+        return $indent . $name . ' ' . html_writer::link(
+            new moodle_url('/local/coderunner_manager/index.php'),
+            get_string('editatsitelevel', 'local_coderunner_manager'),
+            ['class' => 'small ms-2']
+        );
     }
 
     return $indent . html_writer::link(

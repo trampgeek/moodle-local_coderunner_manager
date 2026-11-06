@@ -88,3 +88,6 @@ $string['summary_help'] = 'A single sentence describing what this prototype is f
 $string['thischange'] = 'This change';
 $string['prototypelist_intro_course'] = 'The prototypes {$a} can use: its own, and the site prototypes every course shares. Select a prototype to edit it. Built-in prototypes cannot be edited, because every CodeRunner release rewrites them.';
 $string['prototypelist_intro_site'] = 'The site prototypes, which every course on this server can use. Changing one affects questions in every course. Each course also has prototypes of its own, which are listed on that course\'s page.';
+$string['editatsitelevel'] = '(edit on the site prototypes page)';
+$string['prototypemanager'] = 'Prototype manager';
+$string['prototypemanager_desc'] = 'Create and edit the prototypes that questions inherit their settings from.';

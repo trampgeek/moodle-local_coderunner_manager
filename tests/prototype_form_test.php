@@ -115,7 +115,10 @@ final class prototype_form_test extends \advanced_testcase {
         $checked = 0;
         foreach (prototype_form::sections() as $section) {
             foreach (settings_form::fields_of($section) as $name => $field) {
-                $this->assertTrue($mform->elementExists($name . '_group'), "No control for $name.");
+                $this->assertTrue(
+                    $mform->elementExists($field->iscode ? $name : $name . '_group'),
+                    "No control for $name."
+                );
                 $checked++;
             }
         }
