@@ -42,6 +42,14 @@ $PAGE->set_context($context);
 $PAGE->set_title(get_string('prototypelist', 'local_coderunner_manager'));
 $PAGE->set_heading(get_string('prototypelist', 'local_coderunner_manager'));
 
+$intro = $courseid && $courseid != SITEID
+    ? get_string(
+        'prototypelist_intro_course',
+        'local_coderunner_manager',
+        format_string($DB->get_field('course', 'shortname', ['id' => $courseid]))
+    )
+    : get_string('prototypelist_intro_site', 'local_coderunner_manager');
+
 $repo = new prototype_repository();
 $prototypes = $repo->list_for_course($courseid ?: SITEID);
 
@@ -53,8 +61,7 @@ $coursenames = $prototypes
     : [];
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('prototypelist', 'local_coderunner_manager'));
-echo html_writer::tag('p', get_string('prototypelist_intro', 'local_coderunner_manager'));
+echo html_writer::tag('p', $intro);
 
 echo html_writer::div(
     html_writer::link(
@@ -88,25 +95,21 @@ foreach ($prototypes as $prototype) {
  * @param prototype $prototype the prototype.
  * @return string[] the rendered links.
  */
-function prototype_actions(prototype $prototype): array {
-    $links = [];
+function prototype_name_cell(prototype $prototype, int $depth): string {
+    $indent = str_repeat('&nbsp;', $depth * 4);
+    $name = s($prototype->name);
 
-    if (!$prototype->builtin || $prototype->issitedefaults) {
-        $links[] = html_writer::link(
-            new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
-            get_string('edit')
-        );
+    // A built-in is rewritten by every release, so it is not a link: editing it
+    // would lose the change. Site defaults is the exception, since it exists to
+    // be edited.
+    if ($prototype->builtin && !$prototype->issitedefaults) {
+        return $indent . $name;
     }
 
-    $links[] = html_writer::link(
-        new moodle_url('/local/coderunner_manager/edit.php', [
-            'courseid' => $prototype->courseid,
-            'parentid' => $prototype->id,
-        ]),
-        get_string('makechild', 'local_coderunner_manager')
+    return $indent . html_writer::link(
+        new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
+        $name
     );
-
-    return $links;
 }
 
 /**
@@ -124,7 +127,7 @@ function print_prototype_row(
     int $depth = 0
 ): void {
     $version = $prototype->currentversion;
-    $label = s($prototype->name);
+    $label = prototype_name_cell($prototype, $depth);
     if ($prototype->issitedefaults) {
         $label .= ' ' . html_writer::tag(
             'span',
@@ -146,14 +149,13 @@ function print_prototype_row(
     $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0];
 
     echo html_writer::start_tag('tr');
-    echo html_writer::tag('td', str_repeat('&nbsp;', $depth * 4) . $label);
-    echo html_writer::tag('td', s($scope));
+    echo html_writer::tag('td', $label, ['class' => 'text-nowrap']);
+    echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
     echo html_writer::tag('td', $counts['questions'] ?: '');
     echo html_writer::tag('td', $counts['children'] ?: '');
-    echo html_writer::tag('td', s($version ? $version->summary : ''));
-    echo html_writer::tag('td', implode(' ', prototype_actions($prototype)));
+    echo html_writer::tag('td', s($version ? $version->summary : ''), ['class' => 'w-50']);
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
@@ -163,7 +165,7 @@ function print_prototype_row(
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary', 'actions'] as $header) {
+foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');

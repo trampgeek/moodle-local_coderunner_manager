@@ -144,10 +144,13 @@ if ($data = $form->get_data()) {
 // Code and JSON fields are edited in Ace, which the question type ships
 // along with the wrapper that attaches it (decision 22). The template is
 // highlighted in whatever language the prototype resolves to.
-settings_form::require_ace(
-    prototype_form::sections(),
-    (string) ($inherited->was_set('language') ? $inherited->get('language') : '')
-);
+// The language must come from what this prototype resolves to, its own
+// overrides included, or one that sets its own language would get no syntax
+// colouring.
+$resolved = $effectiveparent
+    ? $repo->chain_for($effectiveparent, $own)->resolve()
+    : prototype_chain::from_arrays([$own->to_array()])->resolve();
+settings_form::require_ace(prototype_form::sections(), (string) $resolved->get('language'));
 
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title);
