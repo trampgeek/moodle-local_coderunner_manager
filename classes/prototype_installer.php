@@ -48,6 +48,51 @@ class prototype_installer {
     protected array $counts = [];
 
     /**
+     * Queue the migration task if the site still needs it.
+     *
+     * Called from the install step, where the tables have just been created and
+     * are therefore empty, and again from every upgrade, where it is the only
+     * route back for a site whose task was lost — dropped from the queue, or
+     * never queued because the manager was installed before the task existed.
+     * Without it such a site has no prototypes and no way to get any.
+     *
+     * Queueing is cheap and context-free, which is why it is safe in an install
+     * or upgrade step when doing the work itself is not: the question banks the
+     * migration must search do not exist yet.
+     *
+     * @return bool true if a task was queued.
+     */
+    public static function queue_migration_if_needed(): bool {
+        global $DB;
+
+        $needed = !$DB->record_exists(prototype_repository::PROTOTYPES, []);
+
+        if (!$needed) {
+            // The prototypes are there, but a question may still be waiting for
+            // its prototype id — a conversion that stopped part way, or a
+            // question restored from a pre-6.0 backup.
+            $dbman = $DB->get_manager();
+            $table = new \xmldb_table('question_coderunner_options');
+            $column = new \xmldb_field('overrides');
+            if ($dbman->table_exists($table) && $dbman->field_exists($table, $column)) {
+                $needed = $DB->record_exists_select(
+                    'question_coderunner_options',
+                    'prototypetype = 0 AND overrides IS NULL'
+                );
+            }
+        }
+
+        if (!$needed) {
+            return false;
+        }
+
+        // $checkforexisting, so an upgrade does not stack another copy of a
+        // task that is still waiting to run.
+        \core\task\manager::queue_adhoc_task(new task\install_prototypes(), true);
+        return true;
+    }
+
+    /**
      * @param prototype_repository|null $repo the repository to write through.
      */
     public function __construct(?prototype_repository $repo = null) {

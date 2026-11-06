@@ -44,5 +44,15 @@ function xmldb_local_coderunner_manager_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026110501, 'local', 'coderunner_manager');
     }
 
+    if ($oldversion < 2026110700) {
+        upgrade_plugin_savepoint(true, 2026110700, 'local', 'coderunner_manager');
+    }
+
+    // Checked on every upgrade rather than inside a version guard, because the
+    // case it recovers from is a task that was lost, which carries no version
+    // of its own. It queues nothing when the prototypes are present and every
+    // question already has its prototype id.
+    \local_coderunner_manager\prototype_installer::queue_migration_if_needed();
+
     return true;
 }

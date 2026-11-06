@@ -33,5 +33,5 @@ defined('MOODLE_INTERNAL') || die();
  * hook even though Moodle records the plugin's version before running it.
  */
 function xmldb_local_coderunner_manager_install(): void {
-    \core\task\manager::queue_adhoc_task(new \local_coderunner_manager\task\install_prototypes());
+    \local_coderunner_manager\prototype_installer::queue_migration_if_needed();
 }
