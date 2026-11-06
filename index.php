@@ -102,7 +102,12 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
     // A built-in is rewritten by every release, so it is not a link: editing it
     // would lose the change.
     if ($prototype->builtin && !$prototype->issitedefaults) {
-        return $indent . $name;
+        // Not editable, because every release rewrites it, but its settings
+        // still have to be readable by anyone choosing it.
+        return $indent . html_writer::link(
+            new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
+            $name
+        );
     }
 
     // Site defaults sits under every question on the server, so it is editable
@@ -140,18 +145,13 @@ function print_prototype_row(
 ): void {
     $version = $prototype->currentversion;
     $label = prototype_name_cell($prototype, $depth);
-    if ($prototype->issitedefaults) {
-        $label .= ' ' . html_writer::tag(
-            'span',
-            get_string('issitedefaults', 'local_coderunner_manager'),
-            ['class' => 'badge bg-primary text-white']
-        );
-    } else if ($prototype->builtin) {
-        $label .= ' ' . html_writer::tag(
-            'span',
-            get_string('isbuiltin', 'local_coderunner_manager'),
-            ['class' => 'badge bg-secondary text-white']
-        );
+
+    // The kind is a column of its own. In the name cell it sat at whatever
+    // depth the prototype was indented to, so the badges formed a ragged edge;
+    // and on Site defaults it repeated the name.
+    $kind = '';
+    if ($prototype->builtin && !$prototype->issitedefaults) {
+        $kind = get_string('isbuiltin', 'local_coderunner_manager');
     }
 
     $scope = $prototype->is_site_prototype()
@@ -162,6 +162,7 @@ function print_prototype_row(
 
     echo html_writer::start_tag('tr');
     echo html_writer::tag('td', $label, ['class' => 'text-nowrap']);
+    echo html_writer::tag('td', $kind, ['class' => 'text-nowrap text-muted small']);
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
@@ -177,7 +178,7 @@ function print_prototype_row(
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
+foreach (['prototype', 'kind', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');

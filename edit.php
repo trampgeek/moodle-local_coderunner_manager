@@ -54,10 +54,10 @@ if ($courseid == SITEID && !is_siteadmin()) {
 }
 
 // A built-in is rewritten by every CodeRunner release, so an edit to one would
-// be silently lost. Site defaults is the exception: it exists to be edited.
-if ($prototype && $prototype->builtin && !$prototype->issitedefaults) {
-    throw new moodle_exception('cannoteditbuiltin', 'local_coderunner_manager', '', $prototype->name);
-}
+// be silently lost. It is shown read-only instead of being refused, because
+// someone choosing a prototype needs to see what it sets. Site defaults is the
+// exception: it exists to be edited.
+$readonly = $prototype && $prototype->builtin && !$prototype->issitedefaults;
 
 $pageparams = $id ? ['id' => $id] : ['courseid' => $courseid];
 $url = new moodle_url('/local/coderunner_manager/edit.php', $pageparams);
@@ -65,9 +65,13 @@ $listurl = new moodle_url('/local/coderunner_manager/index.php', $courseid == SI
 
 $PAGE->set_url($url);
 $PAGE->set_context($context);
-$title = $prototype
-    ? get_string('editprototype', 'local_coderunner_manager', $prototype->name)
-    : get_string('newprototype', 'local_coderunner_manager');
+if (!$prototype) {
+    $title = get_string('newprototype', 'local_coderunner_manager');
+} else if ($readonly) {
+    $title = get_string('viewprototype', 'local_coderunner_manager', $prototype->name);
+} else {
+    $title = get_string('editprototype', 'local_coderunner_manager', $prototype->name);
+}
 $PAGE->set_title($title);
 $PAGE->set_heading($title);
 $PAGE->navbar->add(get_string('prototypelist', 'local_coderunner_manager'), $listurl);
@@ -100,13 +104,14 @@ $form = new prototype_form($url, [
     'own' => $own,
     'parents' => $parents,
     'courseid' => $courseid,
+    'readonly' => $readonly,
 ]);
 
 if ($form->is_cancelled()) {
     redirect($listurl);
 }
 
-if ($data = $form->get_data()) {
+if (!$readonly && ($data = $form->get_data())) {
     $overrides = settings_form::overrides_from(
         $data,
         prototype_form::sections(),
@@ -153,6 +158,8 @@ $resolved = $effectiveparent
 settings_form::require_ace(prototype_form::sections(), (string) $resolved->get('language'));
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading($title);
+if ($readonly) {
+    echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
+}
 $form->display();
 echo $OUTPUT->footer();

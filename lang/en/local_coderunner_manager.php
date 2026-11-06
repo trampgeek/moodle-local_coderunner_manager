@@ -91,3 +91,6 @@ $string['prototypelist_intro_site'] = 'The site prototypes, which every course o
 $string['editatsitelevel'] = '(edit on the site prototypes page)';
 $string['prototypemanager'] = 'Prototype manager';
 $string['prototypemanager_desc'] = 'Create and edit the prototypes that questions inherit their settings from.';
+$string['headerkind'] = 'Kind';
+$string['viewprototype'] = 'View prototype: {$a}';
+$string['builtinreadonly'] = 'This is a built-in prototype. Every CodeRunner release rewrites it, so it cannot be edited here. To build on it, make a child prototype and override only what differs.';

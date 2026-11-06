@@ -62,6 +62,8 @@ class prototype_form extends \moodleform {
         $own = $this->_customdata['own'];
         // Candidate parents, id => label, with cycles already excluded.
         $parents = $this->_customdata['parents'];
+        // True when the prototype may be read but not changed.
+        $readonly = !empty($this->_customdata['readonly']);
 
         $mform->addElement('hidden', 'id', $prototype ? $prototype->id : 0);
         $mform->setType('id', PARAM_INT);
@@ -115,7 +117,13 @@ class prototype_form extends \moodleform {
         $mform->setType('commitmessage', PARAM_TEXT);
         $mform->addHelpButton('commitmessage', 'commitmessage', 'local_coderunner_manager');
 
-        $this->add_action_buttons(true, get_string('savenewversion', 'local_coderunner_manager'));
+        if ($readonly) {
+            // Every control is frozen rather than hidden, so the settings and
+            // where each came from stay visible.
+            $mform->hardFreeze();
+        } else {
+            $this->add_action_buttons(true, get_string('savenewversion', 'local_coderunner_manager'));
+        }
 
         if ($prototype) {
             $mform->setDefault('name', $prototype->name);

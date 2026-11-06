@@ -68,7 +68,7 @@ final class prototype_form_test extends \advanced_testcase {
      * @param prototype|null $prototype the prototype being edited.
      * @return prototype_form the form.
      */
-    private function build_form(?prototype $prototype): prototype_form {
+    private function build_form(?prototype $prototype, bool $readonly = false): prototype_form {
         $inherited = $prototype && $prototype->parentid()
             ? $this->repo->chain_for($prototype->parentid())->resolve()
             : (new prototype_chain([]))->resolve();
@@ -81,6 +81,7 @@ final class prototype_form_test extends \advanced_testcase {
                 : new override_set([], ''),
             'parents' => [0 => 'None'],
             'courseid' => SITEID,
+            'readonly' => $readonly,
         ]);
     }
 
@@ -173,5 +174,27 @@ final class prototype_form_test extends \advanced_testcase {
         $leaf = $this->repo->create('alone', SITEID, new override_set([], 'alone'));
 
         $this->assertSame([], $this->repo->descendant_ids($leaf->id));
+    }
+
+    /**
+     * A built-in is shown frozen rather than refused: its settings have to be
+     * readable by anyone choosing it, but every release rewrites it, so an
+     * edit would be lost.
+     */
+    public function test_a_read_only_form_offers_no_save_button(): void {
+        $builtin = $this->repo->create(
+            'python3_builtin',
+            SITEID,
+            new override_set(['template' => 'STOCK'], 'python3_builtin'),
+            null,
+            '',
+            '',
+            true
+        );
+
+        $mform = $this->quickform($this->build_form($builtin, true));
+
+        $this->assertFalse($mform->elementExists('buttonar'), 'A frozen form still offered a save button.');
+        $this->assertTrue($mform->elementExists('template'), 'A frozen form hid the settings instead of showing them.');
     }
 }
