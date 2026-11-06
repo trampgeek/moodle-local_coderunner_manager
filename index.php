@@ -45,6 +45,13 @@ $PAGE->set_heading(get_string('prototypelist', 'local_coderunner_manager'));
 $repo = new prototype_repository();
 $prototypes = $repo->list_for_course($courseid ?: SITEID);
 
+// Everything the rows need, gathered before the tree is walked rather than
+// once per row: a course can hold scores of prototypes.
+$usage = $repo->usage_counts(array_keys($prototypes));
+$coursenames = $prototypes
+    ? $DB->get_records_list('course', 'id', array_unique(array_column($prototypes, 'courseid')), '', 'id, shortname')
+    : [];
+
 echo $OUTPUT->header();
 echo $OUTPUT->heading(get_string('prototypelist', 'local_coderunner_manager'));
 echo html_writer::tag('p', get_string('prototypelist_intro', 'local_coderunner_manager'));
@@ -68,9 +75,13 @@ foreach ($prototypes as $prototype) {
  * @param array $childrenof prototypes indexed by their parent's id.
  * @param int $depth how deep in the tree this prototype sits.
  */
-function print_prototype_row(prototype $prototype, array $childrenof, int $depth = 0): void {
-    global $DB;
-
+function print_prototype_row(
+    prototype $prototype,
+    array $childrenof,
+    array $usage,
+    array $coursenames,
+    int $depth = 0
+): void {
     $version = $prototype->currentversion;
     $label = s($prototype->name);
     if ($prototype->issitedefaults) {
@@ -89,29 +100,33 @@ function print_prototype_row(prototype $prototype, array $childrenof, int $depth
 
     $scope = $prototype->is_site_prototype()
         ? get_string('scopesite', 'local_coderunner_manager')
-        : ($DB->get_field('course', 'shortname', ['id' => $prototype->courseid]) ?: $prototype->courseid);
+        : ($coursenames[$prototype->courseid]->shortname ?? $prototype->courseid);
+
+    $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0];
 
     echo html_writer::start_tag('tr');
     echo html_writer::tag('td', str_repeat('&nbsp;', $depth * 4) . $label);
     echo html_writer::tag('td', s($scope));
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
+    echo html_writer::tag('td', $counts['questions'] ?: '');
+    echo html_writer::tag('td', $counts['children'] ?: '');
     echo html_writer::tag('td', s($version ? $version->summary : ''));
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
-        print_prototype_row($child, $childrenof, $depth + 1);
+        print_prototype_row($child, $childrenof, $usage, $coursenames, $depth + 1);
     }
 }
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'scope', 'version', 'fieldsset', 'summary'] as $header) {
+foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');
 foreach ($childrenof[0] ?? [] as $root) {
-    print_prototype_row($root, $childrenof);
+    print_prototype_row($root, $childrenof, $usage, $coursenames);
 }
 echo html_writer::end_tag('table');
 

@@ -380,4 +380,42 @@ final class prototype_repository_test extends \advanced_testcase {
         $this->expectException(\moodle_exception::class);
         $this->repo->get_or_fail(-1);
     }
+
+    /**
+     * The library view asks how much depends on each prototype. Child
+     * prototypes are counted from the parent recorded on each one's current
+     * version, so a prototype re-parented in a later version counts against
+     * its new parent and not its old one.
+     */
+    public function test_usage_counts_children(): void {
+        $parent = $this->repo->create('parent', SITEID, new override_set([], 'parent'));
+        $this->repo->create('child_a', SITEID, new override_set([], 'child_a'), $parent->id);
+        $this->repo->create('child_b', SITEID, new override_set([], 'child_b'), $parent->id);
+        $lonely = $this->repo->create('lonely', SITEID, new override_set([], 'lonely'));
+
+        $counts = $this->repo->usage_counts([$parent->id, $lonely->id]);
+
+        $this->assertSame(2, $counts[$parent->id]['children']);
+        $this->assertSame(0, $counts[$lonely->id]['children']);
+    }
+
+    /**
+     * Every prototype asked about appears in the result, including those
+     * nothing depends on, so a caller can index the result without checking.
+     */
+    public function test_usage_counts_includes_prototypes_with_no_dependants(): void {
+        $prototype = $this->repo->create('unused', SITEID, new override_set([], 'unused'));
+
+        $counts = $this->repo->usage_counts([$prototype->id]);
+
+        $this->assertSame(['questions' => 0, 'children' => 0], $counts[$prototype->id]);
+    }
+
+    /**
+     * Asking about nothing is not an error, since a course may have no
+     * prototypes at all.
+     */
+    public function test_usage_counts_of_nothing(): void {
+        $this->assertSame([], $this->repo->usage_counts([]));
+    }
 }

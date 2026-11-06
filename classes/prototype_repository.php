@@ -582,6 +582,60 @@ class prototype_repository {
     }
 
     /**
+     * How many questions and child prototypes depend on each of the given
+     * prototypes, directly.
+     *
+     * Two grouped queries rather than one per prototype, because the library
+     * view asks about every prototype on the page at once and a course can
+     * have scores of them.
+     *
+     * Questions are counted as an author counts them — one per question bank
+     * entry, not one per stored version — since a question edited twenty times
+     * is still one question depending on the prototype. Only direct dependants
+     * are counted; the usage report walks the whole subtree.
+     *
+     * @param int[] $prototypeids the prototypes to count for.
+     * @return array prototype id => ['questions' => int, 'children' => int].
+     */
+    public function usage_counts(array $prototypeids): array {
+        global $DB;
+
+        $counts = [];
+        foreach ($prototypeids as $id) {
+            $counts[(int) $id] = ['questions' => 0, 'children' => 0];
+        }
+        if (!$prototypeids) {
+            return $counts;
+        }
+
+        [$insql, $params] = $DB->get_in_or_equal($prototypeids, SQL_PARAMS_NAMED, 'p');
+
+        $questions = $DB->get_records_sql("
+            SELECT o.prototypeid AS id, COUNT(DISTINCT qbe.id) AS n
+              FROM {question_coderunner_options} o
+              JOIN {question} q ON q.id = o.questionid
+              JOIN {question_versions} qv ON qv.questionid = q.id
+              JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+             WHERE o.prototypeid $insql
+          GROUP BY o.prototypeid", $params);
+        foreach ($questions as $row) {
+            $counts[(int) $row->id]['questions'] = (int) $row->n;
+        }
+
+        $children = $DB->get_records_sql("
+            SELECT v.parentid AS id, COUNT(*) AS n
+              FROM {" . self::PROTOTYPES . "} p
+              JOIN {" . self::VERSIONS . "} v ON v.id = p.currentversionid
+             WHERE v.parentid $insql
+          GROUP BY v.parentid", $params);
+        foreach ($children as $row) {
+            $counts[(int) $row->id]['children'] = (int) $row->n;
+        }
+
+        return $counts;
+    }
+
+    /**
      * The file areas a question's support files are merged from, root first.
      *
      * Only the locations, not the files. The question type reads the files
