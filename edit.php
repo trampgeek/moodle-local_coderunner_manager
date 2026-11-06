@@ -141,6 +141,14 @@ if ($data = $form->get_data()) {
     redirect($listurl, get_string('prototypesaved', 'local_coderunner_manager', $data->name));
 }
 
+// Code and JSON fields are edited in Ace, which the question type ships
+// along with the wrapper that attaches it (decision 22). The template is
+// highlighted in whatever language the prototype resolves to.
+settings_form::require_ace(
+    prototype_form::sections(),
+    (string) ($inherited->was_set('language') ? $inherited->get('language') : '')
+);
+
 echo $OUTPUT->header();
 echo $OUTPUT->heading($title);
 $form->display();
