@@ -142,6 +142,57 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
     }
 
     /**
+     * A prototype carries its template parameters.
+     *
+     * CodeRunner 5 merged a prototype question's template parameters into every
+     * question using it, through evaluate_merged_parameters() rather than
+     * through the inherited-field list. A converter driven only by that list
+     * discards them, which on the development site silently affected 11,883 of
+     * 12,346 questions.
+     */
+    public function test_a_prototype_carries_its_template_parameters(): void {
+        $overrides = legacy_converter::prototype_overrides([
+            'templateparams' => '{"isfunction": false}',
+            'templateparamslang' => 'twig',
+            'templateparamsevalpertry' => 0,
+        ])->to_array();
+
+        $this->assertSame('{"isfunction": false}', $overrides['templateparams']);
+        $this->assertSame('twig', $overrides['templateparamslang']);
+        $this->assertArrayHasKey('templateparamsevalpertry', $overrides);
+    }
+
+    /**
+     * A prototype carries its UI parameters, which reached a question through
+     * evaluate_merged_ui_parameters() for the same reason.
+     */
+    public function test_a_prototype_carries_its_ui_parameters(): void {
+        $overrides = legacy_converter::prototype_overrides([
+            'uiparameters' => '{"wrapper_src": "prototypeextra"}',
+        ])->to_array();
+
+        $this->assertSame('{"wrapper_src": "prototypeextra"}', $overrides['uiparameters']);
+    }
+
+    /**
+     * The language and per-try settings describe how to evaluate template
+     * parameters, so they are not carried when there are none. Otherwise every
+     * migrated prototype would state a preference about nothing, and collected
+     * fields are never pruned.
+     */
+    public function test_evaluation_settings_are_not_carried_without_parameters(): void {
+        $overrides = legacy_converter::prototype_overrides([
+            'templateparams' => '',
+            'templateparamslang' => 'python3',
+            'templateparamsevalpertry' => 1,
+        ])->to_array();
+
+        $this->assertArrayNotHasKey('templateparams', $overrides);
+        $this->assertArrayNotHasKey('templateparamslang', $overrides);
+        $this->assertArrayNotHasKey('templateparamsevalpertry', $overrides);
+    }
+
+    /**
      * Migrating twice converts nothing the second time, so a partial run can be
      * resumed and the task can run on every upgrade.
      */
