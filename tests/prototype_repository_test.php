@@ -479,4 +479,54 @@ final class prototype_repository_test extends \advanced_testcase {
 
         $this->assertSame($parent->id, $restored->parentid());
     }
+
+    /**
+     * Documentation carries the format it was written in, because it is edited
+     * through Moodle's editor like any other text field and a site may not be
+     * using HTML.
+     */
+    public function test_documentation_keeps_its_format(): void {
+        $prototype = $this->repo->create(
+            'p',
+            SITEID,
+            new override_set([], 'p'),
+            null,
+            '',
+            '# Markdown documentation',
+            false,
+            '',
+            false,
+            [],
+            FORMAT_MARKDOWN
+        );
+
+        // Moodle's FORMAT_ constants are defined as strings while the column
+        // is an integer, so the cast is deliberate and the comparison says so.
+        $this->assertSame((int) FORMAT_MARKDOWN, $prototype->currentversion->documentationformat);
+
+        $reloaded = $this->repo->get_or_fail($prototype->id);
+        $this->assertSame((int) FORMAT_MARKDOWN, $reloaded->currentversion->documentationformat);
+    }
+
+    /**
+     * A new version keeps whatever format it is saved with, so editing
+     * documentation cannot silently change how it is rendered.
+     */
+    public function test_a_new_version_keeps_the_format_it_is_given(): void {
+        $prototype = $this->repo->create('p', SITEID, new override_set([], 'p'));
+        $this->assertSame((int) FORMAT_HTML, $prototype->currentversion->documentationformat);
+
+        $updated = $this->repo->save_new_version(
+            $prototype,
+            new override_set([], 'p'),
+            null,
+            '',
+            'Plain text now',
+            '',
+            null,
+            FORMAT_PLAIN
+        );
+
+        $this->assertSame((int) FORMAT_PLAIN, $updated->currentversion->documentationformat);
+    }
 }

@@ -48,6 +48,27 @@ function xmldb_local_coderunner_manager_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026110700, 'local', 'coderunner_manager');
     }
 
+    if ($oldversion < 2026110701) {
+        // Documentation is edited through Moodle's editor, so it carries a
+        // format like any other text field. Existing rows default to HTML,
+        // which is what every migrated prototype's question text was.
+        $table = new xmldb_table('local_coderunner_manager_versions');
+        $field = new xmldb_field(
+            'documentationformat',
+            XMLDB_TYPE_INTEGER,
+            '2',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '1',
+            'documentation'
+        );
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026110701, 'local', 'coderunner_manager');
+    }
+
     // Checked on every upgrade rather than inside a version guard, because the
     // case it recovers from is a task that was lost, which carries no version
     // of its own. It queues nothing when the prototypes are present and every

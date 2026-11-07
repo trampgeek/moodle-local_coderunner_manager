@@ -420,7 +420,8 @@ class prototype_repository {
         bool $builtin = false,
         string $uuid = '',
         bool $issitedefaults = false,
-        array $files = []
+        array $files = [],
+        int $documentationformat = FORMAT_HTML
     ): prototype {
         global $DB, $USER;
 
@@ -456,6 +457,7 @@ class prototype_repository {
             $overrides,
             $summary,
             $documentation,
+            $documentationformat,
             '',
             $now
         );
@@ -494,7 +496,8 @@ class prototype_repository {
         string $summary = '',
         string $documentation = '',
         string $commitmessage = '',
-        ?array $files = null
+        ?array $files = null,
+        int $documentationformat = FORMAT_HTML
     ): prototype {
         global $DB, $USER;
 
@@ -517,6 +520,7 @@ class prototype_repository {
             $overrides,
             $summary,
             $documentation,
+            $documentationformat,
             $commitmessage,
             $now
         );
@@ -932,6 +936,7 @@ class prototype_repository {
         override_set $overrides,
         string $summary,
         string $documentation,
+        int $documentationformat,
         string $commitmessage,
         int $now
     ): int {
@@ -944,6 +949,7 @@ class prototype_repository {
             'overrides' => json_encode($overrides->to_array()),
             'summary' => $summary,
             'documentation' => $documentation,
+            'documentationformat' => $documentationformat,
             'commitmessage' => $commitmessage,
             'timecreated' => $now,
             'usermodified' => (int) $USER->id,
@@ -1027,6 +1033,7 @@ class prototype_repository {
             overrides: new override_set(is_array($values) ? $values : []),
             summary: (string) ($record->summary ?? ''),
             documentation: (string) ($record->documentation ?? ''),
+            documentationformat: (int) ($record->documentationformat ?? FORMAT_HTML),
             commitmessage: (string) ($record->commitmessage ?? ''),
             timecreated: (int) $record->timecreated,
             usermodified: (int) $record->usermodified,

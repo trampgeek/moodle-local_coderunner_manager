@@ -233,7 +233,8 @@ class prototype_installer {
                 true,
                 $root->id,
                 [],
-                self::builtin_uuid($name)
+                self::builtin_uuid($name),
+                legacy_converter::documentation_format($columns)
             );
         }
         return $this->counts;
@@ -295,7 +296,9 @@ class prototype_installer {
                 legacy_converter::documentation($columns),
                 false,
                 $root->id,
-                $this->question_support_files($record)
+                $this->question_support_files($record),
+                '',
+                legacy_converter::documentation_format($columns)
             );
         }
         return $this->counts;
@@ -363,7 +366,8 @@ class prototype_installer {
         bool $builtin,
         ?int $parentid = null,
         array $files = [],
-        string $uuid = ''
+        string $uuid = '',
+        int $documentationformat = FORMAT_HTML
     ): void {
         $overrides = $this->prune_redundant($overrides, $parentid);
         // A built-in is looked up by its uuid, which survives the rename that
@@ -389,7 +393,8 @@ class prototype_installer {
                 $builtin,
                 $uuid,
                 false,
-                $files
+                $files,
+                $documentationformat
             );
             $this->counts['created']++;
             return;
@@ -407,7 +412,8 @@ class prototype_installer {
             $existing->currentversion->summary,
             $documentation,
             get_string('installerupdated', 'local_coderunner_manager'),
-            $files ?: null
+            $files ?: null,
+            $documentationformat
         );
         $this->counts['updated']++;
     }

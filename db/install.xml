@@ -35,6 +35,7 @@
         <FIELD NAME="overrides" TYPE="text" NOTNULL="true" SEQUENCE="false" COMMENT="A JSON document of the field values this prototype sets. A field absent from the document is inherited; a field present with any value, including an empty string, is an override."/>
         <FIELD NAME="summary" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="One sentence, shown in the prototype picker."/>
         <FIELD NAME="documentation" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Documentation for question authors, shown in the question form once this prototype is chosen. Takes over the role the question text of a prototype question plays in CodeRunner 5."/>
+        <FIELD NAME="documentationformat" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="The FORMAT_ constant the documentation is written in, as for any Moodle text field edited through the editor."/>
         <FIELD NAME="commitmessage" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="An optional note from the author describing the change."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>

@@ -142,6 +142,10 @@ if (!$readonly && ($data = $form->get_data())) {
     );
     $newparent = empty($data->parentid) ? null : (int) $data->parentid;
 
+    // An editor element submits an array of text and format.
+    $documentation = $data->documentation['text'] ?? '';
+    $documentationformat = (int) ($data->documentation['format'] ?? FORMAT_HTML);
+
     $splitinto = null;
     if ($prototype) {
         if ($prototype->builtin && !$prototype->issitedefaults) {
@@ -161,8 +165,10 @@ if (!$readonly && ($data = $form->get_data())) {
             $overrides,
             $splitinto ?? $newparent,
             $data->summary,
-            $data->documentation,
-            $data->commitmessage
+            $documentation,
+            $data->commitmessage,
+            null,
+            $documentationformat
         );
     } else {
         $repo->create(
@@ -171,7 +177,12 @@ if (!$readonly && ($data = $form->get_data())) {
             $overrides,
             $newparent,
             $data->summary,
-            $data->documentation
+            $documentation,
+            false,
+            '',
+            false,
+            [],
+            $documentationformat
         );
     }
 

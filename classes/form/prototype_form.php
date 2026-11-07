@@ -89,11 +89,17 @@ class prototype_form extends \moodleform {
         $mform->setType('summary', PARAM_TEXT);
         $mform->addHelpButton('summary', 'summary', 'local_coderunner_manager');
 
+        // Moodle's editor, so an author gets whichever one they have chosen
+        // and the documentation carries a format like any other Moodle text.
+        // Embedded files are off: documentation that depends on files in a
+        // draft area would have to travel with the prototype through backup,
+        // restore and export, which is M5's problem and not yet solved.
         $mform->addElement(
-            'textarea',
+            'editor',
             'documentation',
             get_string('documentation', 'local_coderunner_manager'),
-            ['rows' => 8, 'cols' => 80]
+            ['rows' => 10],
+            ['maxfiles' => 0, 'noclean' => true]
         );
         $mform->setType('documentation', PARAM_RAW);
         $mform->addHelpButton('documentation', 'documentation', 'local_coderunner_manager');
@@ -132,7 +138,10 @@ class prototype_form extends \moodleform {
             $mform->setDefault('name', $prototype->name);
             $mform->setDefault('parentid', $prototype->parentid() ?? 0);
             $mform->setDefault('summary', $prototype->currentversion?->summary ?? '');
-            $mform->setDefault('documentation', $prototype->currentversion?->documentation ?? '');
+            $mform->setDefault('documentation', [
+                'text' => $prototype->currentversion?->documentation ?? '',
+                'format' => $prototype->currentversion?->documentationformat ?? FORMAT_HTML,
+            ]);
         }
     }
 

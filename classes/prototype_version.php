@@ -43,6 +43,9 @@ final readonly class prototype_version {
      * @param override_set $overrides the field values this version sets.
      * @param string $summary one sentence, shown in the prototype picker.
      * @param string $documentation documentation for question authors.
+     * @param int $documentationformat the FORMAT_ constant it is written in.
+     *      Held as an integer, which is what the column is; Moodle itself
+     *      defines the FORMAT_ constants as strings.
      * @param string $commitmessage an optional note describing the change.
      * @param int $timecreated when this version was saved.
      * @param int $usermodified who saved it.
@@ -55,6 +58,7 @@ final readonly class prototype_version {
         public override_set $overrides,
         public string $summary = '',
         public string $documentation = '',
+        public int $documentationformat = FORMAT_HTML,
         public string $commitmessage = '',
         public int $timecreated = 0,
         public int $usermodified = 0,
