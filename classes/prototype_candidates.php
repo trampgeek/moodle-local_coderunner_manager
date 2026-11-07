@@ -233,18 +233,28 @@ class prototype_candidates {
      * hold their own. They are reached through the context tree rather than by
      * listing modules, so a bank in any kind of activity is included.
      *
-     * **Two queries, and the shape matters.** Asked as one join with the
-     * context test in it, MySQL drives from `question_coderunner_options` and
-     * filters by context last, so the cost is the whole site's questions rather
-     * than the course's: 190 ms on the development site's 13,213 rows, which
-     * extrapolates to about six seconds at 400,000. Finding the course's bank
-     * contexts first and giving the join an explicit list of them makes the
-     * optimiser start at `question_categories.contextid` instead, and the cost
-     * becomes the course's own questions: **28 ms** for the same course, of
-     * which the context query is under a millisecond. Collecting the contexts
-     * that actually hold categories, rather than every context under the
-     * course, also keeps the list proportional to the number of banks — 176
-     * rather than 511 for that course — instead of to the number of activities.
+     * **Two queries, and the shape is what makes it affordable.** Asked as one
+     * join with the context test in it, MySQL drives from
+     * `question_coderunner_options` and filters by context last, so the cost is
+     * flat in the course and linear in the *site*: measured warm on the
+     * development site's 13,213 rows, a course of 19 questions and one of 9,497
+     * both took about 41 ms, which at 400,000 rows would be something like a
+     * second, paid by every course including an empty one.
+     *
+     * Finding the course's bank contexts first and giving the join an explicit
+     * list of them makes the optimiser start at
+     * `question_categories.contextid`, and the cost becomes the *course's* own
+     * questions: 0.3 ms for that 19-question course, 17 ms for one of 3,562 and
+     * 31 ms for one of 9,497, or roughly 3 to 5 µs a question plus a little per
+     * bank. A site reaching 400,000 questions does so by having more courses,
+     * not a bigger one, so a course keeps its own cost however large the site
+     * around it grows. What is left to watch is a single course holding a very
+     * large bank, which would be seconds rather than milliseconds.
+     *
+     * Collecting the contexts that actually hold categories, rather than every
+     * context under the course, also keeps the list proportional to the number
+     * of banks — 176 rather than 511 for the course measured — instead of to the
+     * number of activities.
      *
      * That is fast enough to run on each load of the question form, so the
      * notes' suggestion of a session cache is not taken: a cache here would
