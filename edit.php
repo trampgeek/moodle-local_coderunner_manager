@@ -31,6 +31,8 @@ use qtype_coderunner\v6\prototype_chain;
 use qtype_coderunner\v6\settings_form;
 
 require_once(__DIR__ . '/../../config.php');
+// The file manager's draft-area helpers are not loaded by the bootstrap.
+require_once($CFG->libdir . '/filelib.php');
 
 $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
