@@ -418,4 +418,65 @@ final class prototype_repository_test extends \advanced_testcase {
     public function test_usage_counts_of_nothing(): void {
         $this->assertSame([], $this->repo->usage_counts([]));
     }
+
+    /**
+     * Restoring writes a new version holding the old content. Nothing is
+     * rewound, so the history stays complete and the restore is itself visible
+     * in it — which matters when the restore turns out to be the mistake.
+     */
+    public function test_restoring_adds_a_version_rather_than_rewinding(): void {
+        $prototype = $this->repo->create('p', SITEID, new override_set(['template' => 'ONE'], 'p'));
+        $this->repo->save_new_version($prototype, new override_set(['template' => 'TWO'], 'p'), null);
+        $prototype = $this->repo->save_new_version(
+            $this->repo->get_or_fail($prototype->id),
+            new override_set(['template' => 'THREE'], 'p'),
+            null
+        );
+
+        $restored = $this->repo->restore_version($prototype, 1);
+
+        $this->assertSame(4, $restored->currentversion->version, 'Restoring did not add a version.');
+        $this->assertSame('ONE', $restored->currentversion->overrides->get('template'));
+        $this->assertCount(4, $this->repo->history($prototype->id), 'A version was lost.');
+    }
+
+    /**
+     * The restore says what it did, so the history explains itself.
+     */
+    public function test_a_restore_records_where_it_came_from(): void {
+        $prototype = $this->repo->create('p', SITEID, new override_set(['template' => 'ONE'], 'p'));
+        $prototype = $this->repo->save_new_version($prototype, new override_set(['template' => 'TWO'], 'p'), null);
+
+        $restored = $this->repo->restore_version($prototype, 1);
+
+        $this->assertStringContainsString('1', $restored->currentversion->commitmessage);
+    }
+
+    /**
+     * Restoring a version that does not exist is refused rather than silently
+     * doing nothing.
+     */
+    public function test_restoring_a_missing_version_is_refused(): void {
+        $prototype = $this->repo->create('p', SITEID, new override_set([], 'p'));
+
+        $this->expectException(\moodle_exception::class);
+        $this->repo->restore_version($prototype, 99);
+    }
+
+    /**
+     * A restored version brings back the parent it had, so an undo of a
+     * re-parenting undoes the re-parenting too.
+     */
+    public function test_restoring_brings_back_the_parent(): void {
+        $parent = $this->repo->create('parent', SITEID, new override_set([], 'parent'));
+        $child = $this->repo->create('child', SITEID, new override_set([], 'child'), $parent->id);
+
+        // Detach it, then restore the version that was attached.
+        $child = $this->repo->save_new_version($child, new override_set([], 'child'), null);
+        $this->assertNull($child->parentid());
+
+        $restored = $this->repo->restore_version($child, 1);
+
+        $this->assertSame($parent->id, $restored->parentid());
+    }
 }

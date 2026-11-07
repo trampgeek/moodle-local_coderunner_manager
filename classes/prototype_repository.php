@@ -275,6 +275,38 @@ class prototype_repository {
     }
 
     /**
+     * Bring an earlier version's content back as a new version.
+     *
+     * Nothing is deleted and nothing is rewound. Restoring writes a *new*
+     * version holding the old content, so the history stays complete and the
+     * restore is itself a visible entry in it — which matters when the thing
+     * being undone was someone else's change, or when the restore turns out to
+     * be the mistake.
+     *
+     * @param prototype $prototype the prototype to restore into.
+     * @param int $version the version number whose content to bring back.
+     * @return prototype the prototype, now at a new current version.
+     * @throws \moodle_exception if there is no such version.
+     */
+    public function restore_version(prototype $prototype, int $version): prototype {
+        $history = $this->history($prototype->id);
+        if (!isset($history[$version])) {
+            throw new \moodle_exception('nosuchversion', 'local_coderunner_manager', '', $version);
+        }
+        $old = $history[$version];
+
+        return $this->save_new_version(
+            $prototype,
+            $old->overrides,
+            $old->parentid,
+            $old->summary,
+            $old->documentation,
+            get_string('restoredfromversion', 'local_coderunner_manager', $version),
+            $this->version_files($prototype, $old->id) ?: null
+        );
+    }
+
+    /**
      * Every prototype descended from the given one, however deep.
      *
      * The parent picker uses this to leave out the choices that would make a

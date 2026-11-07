@@ -23,6 +23,7 @@
  */
 
 use local_coderunner_manager\form\prototype_form;
+use local_coderunner_manager\output\history_table;
 use local_coderunner_manager\prototype_repository;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
@@ -33,6 +34,8 @@ require_once(__DIR__ . '/../../config.php');
 $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 $parentid = optional_param('parentid', 0, PARAM_INT);
+$restore = optional_param('restore', 0, PARAM_INT);
+$allversions = optional_param('allversions', 0, PARAM_BOOL);
 
 $repo = new prototype_repository();
 $prototype = $id ? $repo->get_or_fail($id) : null;
@@ -98,6 +101,12 @@ foreach ($repo->list_for_course($courseid) as $candidate) {
         continue;
     }
     $parents[$candidate->id] = $candidate->name;
+}
+
+if ($restore && !$readonly && $prototype) {
+    require_sesskey();
+    $prototype = $repo->restore_version($prototype, $restore);
+    redirect($url, get_string('restoredfromversion', 'local_coderunner_manager', $restore));
 }
 
 $form = new prototype_form($url, [
@@ -181,4 +190,9 @@ if ($readonly) {
     echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
 }
 $form->display();
+
+if ($prototype) {
+    echo history_table::render($prototype, $repo->history($prototype->id), !$readonly, (bool) $allversions);
+}
+
 echo $OUTPUT->footer();
