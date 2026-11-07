@@ -24,7 +24,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version = 2026110701;
+$plugin->version = 2026110702;
 $plugin->requires = 2025041400; // Moodle 5.0.0 or later.
 $plugin->component = 'local_coderunner_manager';
 $plugin->maturity = MATURITY_ALPHA;

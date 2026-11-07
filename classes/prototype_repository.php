@@ -329,6 +329,150 @@ class prototype_repository {
     }
 
     /**
+     * The saved but unpublished version of a prototype, if it has one.
+     *
+     * @param \stdClass $record the prototype's row.
+     * @return prototype_version|null the draft, or null.
+     */
+    protected function draft_version_of(\stdClass $record): ?prototype_version {
+        global $DB;
+
+        if (empty($record->draftversionid)) {
+            return null;
+        }
+        $draft = $DB->get_record(self::VERSIONS, ['id' => $record->draftversionid]);
+        return $draft ? $this->version_from_record($draft) : null;
+    }
+
+    /**
+     * Save an edit without publishing it.
+     *
+     * A draft is an ordinary version that nothing resolves against yet: the
+     * prototype keeps pointing at its published version, so questions go on
+     * behaving as they did while their author works. Saving a second draft
+     * replaces the first, since an author has one piece of work in progress
+     * and a trail of abandoned drafts would be noise in the history.
+     *
+     * @param prototype $prototype the prototype.
+     * @param override_set $overrides what the draft sets.
+     * @param int|null $parentid the parent it would inherit from.
+     * @param string $summary the one-line summary.
+     * @param string $documentation the documentation.
+     * @param string $commitmessage what the change is.
+     * @param \stored_file[]|null $files the support files, or null to keep them.
+     * @param int $documentationformat the documentation's format.
+     * @return prototype the prototype, with its draft.
+     */
+    public function save_draft(
+        prototype $prototype,
+        override_set $overrides,
+        ?int $parentid = null,
+        string $summary = '',
+        string $documentation = '',
+        string $commitmessage = '',
+        ?array $files = null,
+        int $documentationformat = FORMAT_HTML
+    ): prototype {
+        global $DB;
+
+        $transaction = $DB->start_delegated_transaction();
+
+        $published = $prototype->currentversion;
+        $this->discard_draft_inside_transaction($prototype);
+
+        $saved = $this->save_new_version(
+            $this->get_or_fail($prototype->id),
+            $overrides,
+            $parentid,
+            $summary,
+            $documentation,
+            $commitmessage,
+            $files,
+            $documentationformat
+        );
+
+        // save_new_version() published it, which a draft must not be. The
+        // prototype is pointed back at what it was resolving against, and the
+        // new version is recorded as the draft instead.
+        $DB->update_record(self::PROTOTYPES, (object) [
+            'id' => $prototype->id,
+            'currentversionid' => $published?->id,
+            'draftversionid' => $saved->currentversion->id,
+        ]);
+
+        $transaction->allow_commit();
+
+        return $this->get_or_fail($prototype->id);
+    }
+
+    /**
+     * Make a draft the version everything resolves against.
+     *
+     * @param prototype $prototype the prototype.
+     * @return prototype the prototype, with the draft published.
+     * @throws \coding_exception if there is no draft to publish.
+     */
+    public function publish_draft(prototype $prototype): prototype {
+        global $DB;
+
+        if (!$prototype->has_draft()) {
+            throw new \coding_exception("Prototype '{$prototype->name}' has no draft to publish.");
+        }
+
+        $DB->update_record(self::PROTOTYPES, (object) [
+            'id' => $prototype->id,
+            'currentversionid' => $prototype->draftversion->id,
+            'draftversionid' => null,
+            'timemodified' => time(),
+        ]);
+
+        return $this->get_or_fail($prototype->id);
+    }
+
+    /**
+     * Throw a draft away, leaving the published version in force.
+     *
+     * @param prototype $prototype the prototype.
+     * @return prototype the prototype, with no draft.
+     */
+    public function discard_draft(prototype $prototype): prototype {
+        global $DB;
+
+        $transaction = $DB->start_delegated_transaction();
+        $this->discard_draft_inside_transaction($prototype);
+        $transaction->allow_commit();
+
+        return $this->get_or_fail($prototype->id);
+    }
+
+    /**
+     * Remove a prototype's draft, assuming a transaction is already open.
+     *
+     * The version row goes with it, along with its files: an abandoned draft
+     * is not history, and leaving it would make the version numbers jump for
+     * no reason an author could explain.
+     *
+     * @param prototype $prototype the prototype.
+     */
+    protected function discard_draft_inside_transaction(prototype $prototype): void {
+        global $DB;
+
+        if (!$prototype->has_draft()) {
+            return;
+        }
+
+        $draftid = $prototype->draftversion->id;
+        $DB->set_field(self::PROTOTYPES, 'draftversionid', null, ['id' => $prototype->id]);
+        get_file_storage()->delete_area_files(
+            $this->file_contextid($prototype),
+            self::COMPONENT,
+            self::FILEAREA,
+            $draftid
+        );
+        $DB->delete_records(self::VERSIONS, ['id' => $draftid]);
+    }
+
+    /**
      * Bring an earlier version's content back as a new version.
      *
      * Nothing is deleted and nothing is rewound. Restoring writes a *new*
@@ -1063,6 +1207,7 @@ class prototype_repository {
             builtin: (bool) $record->builtin,
             issitedefaults: (bool) ($record->issitedefaults ?? false),
             currentversion: $versionrecord ? $this->version_from_record($versionrecord) : null,
+            draftversion: $this->draft_version_of($record),
             timecreated: (int) $record->timecreated,
             timemodified: (int) $record->timemodified,
             usercreated: (int) $record->usercreated,

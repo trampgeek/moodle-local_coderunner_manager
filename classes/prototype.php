@@ -41,6 +41,8 @@ final readonly class prototype {
      * @param bool $builtin true for a prototype shipped with CodeRunner.
      * @param bool $issitedefaults true for the single Site defaults prototype.
      * @param prototype_version|null $currentversion the version to resolve against.
+     * @param prototype_version|null $draftversion a saved but unpublished
+     *      version, if the author has one in progress.
      * @param int $timecreated when the prototype was created.
      * @param int $timemodified when it was last changed.
      * @param int $usercreated who created it.
@@ -54,6 +56,7 @@ final readonly class prototype {
         public bool $builtin = false,
         public bool $issitedefaults = false,
         public ?prototype_version $currentversion = null,
+        public ?prototype_version $draftversion = null,
         public int $timecreated = 0,
         public int $timemodified = 0,
         public int $usercreated = 0,
@@ -77,5 +80,14 @@ final readonly class prototype {
      */
     public function parentid(): ?int {
         return $this->currentversion?->parentid;
+    }
+
+    /**
+     * Whether a saved but unpublished version is waiting.
+     *
+     * @return bool true if there is a draft.
+     */
+    public function has_draft(): bool {
+        return $this->draftversion !== null;
     }
 }

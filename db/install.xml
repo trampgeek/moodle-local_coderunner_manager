@@ -11,6 +11,7 @@
         <FIELD NAME="builtin" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True for a prototype shipped with CodeRunner, which each release reinstalls and which authors cannot edit."/>
         <FIELD NAME="issitedefaults" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="True for the single Site defaults prototype that sits at the root of every chain. Unlike a built-in it is created once and never rewritten by an upgrade, because site administrators edit it; and it cannot be deleted."/>
         <FIELD NAME="currentversionid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="The version that questions and child prototypes resolve against. Null only in the moment between inserting a prototype and inserting its first version, inside one transaction."/>
+        <FIELD NAME="draftversionid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="A saved but unpublished version, if there is one. Questions go on resolving against currentversionid until it is published, so an author can work on a widely used prototype without every question changing under them."/>
         <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
         <FIELD NAME="usercreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>

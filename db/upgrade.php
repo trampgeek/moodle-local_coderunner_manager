@@ -69,6 +69,26 @@ function xmldb_local_coderunner_manager_upgrade($oldversion): bool {
         upgrade_plugin_savepoint(true, 2026110701, 'local', 'coderunner_manager');
     }
 
+    if ($oldversion < 2026110702) {
+        // A prototype may hold one saved but unpublished version. Questions go
+        // on resolving against the published one until it is published.
+        $table = new xmldb_table('local_coderunner_manager_prototypes');
+        $field = new xmldb_field(
+            'draftversionid',
+            XMLDB_TYPE_INTEGER,
+            '10',
+            null,
+            null,
+            null,
+            null,
+            'currentversionid'
+        );
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        upgrade_plugin_savepoint(true, 2026110702, 'local', 'coderunner_manager');
+    }
+
     // Checked on every upgrade rather than inside a version guard, because the
     // case it recovers from is a task that was lost, which carries no version
     // of its own. It queues nothing when the prototypes are present and every

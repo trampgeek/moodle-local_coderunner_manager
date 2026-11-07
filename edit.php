@@ -36,6 +36,8 @@ $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 $parentid = optional_param('parentid', 0, PARAM_INT);
 $restore = optional_param('restore', 0, PARAM_INT);
+$publish = optional_param('publish', 0, PARAM_BOOL);
+$discard = optional_param('discard', 0, PARAM_BOOL);
 $diff = optional_param('diff', 0, PARAM_INT);
 $allversions = optional_param('allversions', 0, PARAM_BOOL);
 
@@ -90,9 +92,10 @@ $inherited = $effectiveparent
     ? $repo->chain_for($effectiveparent)->resolve()
     : (new prototype_chain([]))->resolve();
 
-$own = $prototype && $prototype->currentversion
-    ? $prototype->currentversion->overrides
-    : new override_set([], $prototype->name ?? '');
+// The draft, when there is one: an author editing again continues from what
+// they last saved rather than from what is published.
+$editing = $prototype?->draftversion ?? $prototype?->currentversion;
+$own = $editing ? $editing->overrides : new override_set([], $prototype->name ?? '');
 
 // Candidate parents: anything this course can see, less the prototype itself
 // and anything descended from it, which would make a cycle.
@@ -103,6 +106,12 @@ foreach ($repo->list_for_course($courseid) as $candidate) {
         continue;
     }
     $parents[$candidate->id] = $candidate->name;
+}
+
+if (($publish || $discard) && !$readonly && $prototype) {
+    require_sesskey();
+    $prototype = $publish ? $repo->publish_draft($prototype) : $repo->discard_draft($prototype);
+    redirect($url, get_string($publish ? 'draftpublished' : 'draftdiscarded', 'local_coderunner_manager'));
 }
 
 if ($restore && !$readonly && $prototype) {
@@ -175,6 +184,8 @@ if (!$readonly && ($data = $form->get_data())) {
     ));
 
     $splitinto = null;
+    $asdraft = !empty($data->savedraft);
+
     if ($prototype) {
         if ($prototype->builtin && !$prototype->issitedefaults) {
             // The first edit to a built-in splits it: the stock content moves
@@ -186,7 +197,8 @@ if (!$readonly && ($data = $form->get_data())) {
         if ($data->name !== $prototype->name) {
             $prototype = $repo->rename($prototype, $data->name);
         }
-        $repo->save_new_version(
+        $save = $asdraft ? 'save_draft' : 'save_new_version';
+        $repo->$save(
             $prototype,
             // A split leaves the stock copy as the parent, which the form did
             // not know about when it was built.
@@ -221,6 +233,9 @@ if (!$readonly && ($data = $form->get_data())) {
             $repo->get_or_fail($splitinto)->name
         ));
     }
+    if ($asdraft) {
+        redirect($url, get_string('draftsaved', 'local_coderunner_manager'));
+    }
     redirect($listurl, get_string('prototypesaved', 'local_coderunner_manager', $data->name));
 }
 
@@ -244,6 +259,27 @@ if ($diff && $prototype) {
 if ($readonly) {
     echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
 }
+if ($prototype && $prototype->has_draft()) {
+    // What publishing would affect, shown with the button rather than after
+    // it: on a widely used prototype the number is the decision.
+    $affected = array_sum(array_column($repo->dependants_by_course($prototype->id), 'questions'));
+
+    echo $OUTPUT->notification(
+        get_string('draftwaiting', 'local_coderunner_manager', $affected) . ' ' .
+        html_writer::link(
+            new moodle_url($url, ['publish' => 1, 'sesskey' => sesskey()]),
+            get_string('publishdraft', 'local_coderunner_manager'),
+            ['class' => 'btn btn-primary btn-sm ms-2']
+        ) . ' ' .
+        html_writer::link(
+            new moodle_url($url, ['discard' => 1, 'sesskey' => sesskey()]),
+            get_string('discarddraft', 'local_coderunner_manager'),
+            ['class' => 'btn btn-secondary btn-sm']
+        ),
+        'notifywarning'
+    );
+}
+
 if ($prototype) {
     echo html_writer::tag('p', html_writer::link(
         new moodle_url('/local/coderunner_manager/usage.php', ['id' => $prototype->id]),

@@ -145,7 +145,30 @@ class prototype_form extends \moodleform {
             // where each came from stay visible.
             $mform->hardFreeze();
         } else {
-            $this->add_action_buttons(true, get_string('savenewversion', 'local_coderunner_manager'));
+            // Publishing stays the primary action. Saving a draft is offered
+            // beside it for a prototype with dependants, where an author may
+            // want to look at the change before every question takes it up.
+            $buttons = [
+                $mform->createElement(
+                    'submit',
+                    'submitbutton',
+                    get_string('savenewversion', 'local_coderunner_manager')
+                ),
+                $mform->createElement('cancel'),
+            ];
+
+            if ($prototype) {
+                // Only an existing prototype can hold a draft: a new one has
+                // nothing published for questions to go on resolving against.
+                array_splice($buttons, 1, 0, [$mform->createElement(
+                    'submit',
+                    'savedraft',
+                    get_string('savedraft', 'local_coderunner_manager'),
+                    ['class' => 'btn-secondary']
+                )]);
+            }
+            $mform->addGroup($buttons, 'buttonar', '', ' ', false);
+            $mform->closeHeaderBefore('buttonar');
         }
 
         if ($prototype) {
