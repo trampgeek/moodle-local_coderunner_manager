@@ -124,7 +124,7 @@ class prototype_form extends \moodleform {
                 continue;
             }
             $header = 'section_' . $section->value;
-            $mform->addElement('header', $header, get_string('section' . $section->value, 'local_coderunner_manager'));
+            $mform->addElement('header', $header, $section->label());
             settings_form::add_section($mform, $section, $inherited, $own, $language);
         }
 
