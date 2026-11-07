@@ -146,23 +146,22 @@ function print_prototype_row(
     $version = $prototype->currentversion;
     $label = prototype_name_cell($prototype, $depth);
 
-    // The kind is a column of its own. In the name cell it sat at whatever
-    // depth the prototype was indented to, so the badges formed a ragged edge;
-    // and on Site defaults it repeated the name.
-    $kind = '';
-    if ($prototype->builtin && !$prototype->issitedefaults) {
-        $kind = get_string('isbuiltin', 'local_coderunner_manager');
+    // Built-ins are created at site scope and stay there, even the stock copy
+    // a split leaves behind, so saying so in the scope cell costs nothing and
+    // a column of its own would be empty for every other row. Site defaults is
+    // left out: its name already says what it is.
+    if (!$prototype->is_site_prototype()) {
+        $scope = $coursenames[$prototype->courseid]->shortname ?? $prototype->courseid;
+    } else if ($prototype->builtin && !$prototype->issitedefaults) {
+        $scope = get_string('scopesitebuiltin', 'local_coderunner_manager');
+    } else {
+        $scope = get_string('scopesite', 'local_coderunner_manager');
     }
-
-    $scope = $prototype->is_site_prototype()
-        ? get_string('scopesite', 'local_coderunner_manager')
-        : ($coursenames[$prototype->courseid]->shortname ?? $prototype->courseid);
 
     $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0];
 
     echo html_writer::start_tag('tr');
     echo html_writer::tag('td', $label, ['class' => 'text-nowrap']);
-    echo html_writer::tag('td', $kind, ['class' => 'text-nowrap text-muted small']);
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
@@ -185,7 +184,7 @@ function print_prototype_row(
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'kind', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
+foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');
