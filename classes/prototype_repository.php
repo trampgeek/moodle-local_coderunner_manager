@@ -275,6 +275,60 @@ class prototype_repository {
     }
 
     /**
+     * How many questions depend on a prototype, directly or through its
+     * descendants, counted per course.
+     *
+     * Counted in SQL rather than by loading the questions: a widely used
+     * prototype has thousands of dependants — python3_scratchpad has 2,314 on
+     * the development site — and this is wanted on a page that must open
+     * quickly whatever the answer turns out to be.
+     *
+     * The grouping is by question bank *context*, which the caller maps to a
+     * course. There are only as many contexts as there are banks, however many
+     * questions they hold, so the mapping is cheap in PHP and avoids a context
+     * walk in SQL that would differ between Moodle versions.
+     *
+     * Questions are counted as an author counts them, one per question bank
+     * entry rather than one per stored version.
+     *
+     * @param int $prototypeid the prototype asked about.
+     * @return array list of ['courseid' => ?int, 'contextid' => int,
+     *      'questions' => int], busiest first. A null course id means a bank
+     *      outside any course.
+     */
+    public function dependants_by_course(int $prototypeid): array {
+        global $DB;
+
+        $ids = array_merge([$prototypeid], $this->descendant_ids($prototypeid));
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'p');
+
+        $rows = $DB->get_records_sql("
+            SELECT qc.contextid, COUNT(DISTINCT qbe.id) AS questions
+              FROM {question_coderunner_options} o
+              JOIN {question} q ON q.id = o.questionid
+              JOIN {question_versions} qv ON qv.questionid = q.id
+              JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+              JOIN {question_categories} qc ON qc.id = qbe.questioncategoryid
+             WHERE o.prototypeid $insql
+          GROUP BY qc.contextid", $params);
+
+        // Several banks can belong to one course, so the per-context counts are
+        // added up per course.
+        $bycourse = [];
+        foreach ($rows as $contextid => $row) {
+            $context = \context::instance_by_id((int) $contextid, IGNORE_MISSING);
+            $coursecontext = $context ? $context->get_course_context(false) : false;
+            $courseid = $coursecontext ? (int) $coursecontext->instanceid : 0;
+
+            $bycourse[$courseid] ??= ['courseid' => $courseid ?: null, 'questions' => 0];
+            $bycourse[$courseid]['questions'] += (int) $row->questions;
+        }
+
+        uasort($bycourse, fn($a, $b) => $b['questions'] <=> $a['questions']);
+        return array_values($bycourse);
+    }
+
+    /**
      * Bring an earlier version's content back as a new version.
      *
      * Nothing is deleted and nothing is rewound. Restoring writes a *new*

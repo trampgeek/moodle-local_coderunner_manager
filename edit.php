@@ -244,6 +244,14 @@ if ($diff && $prototype) {
 if ($readonly) {
     echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
 }
+if ($prototype) {
+    echo html_writer::tag('p', html_writer::link(
+        new moodle_url('/local/coderunner_manager/usage.php', ['id' => $prototype->id]),
+        get_string('usagereport', 'local_coderunner_manager'),
+        ['class' => 'btn btn-secondary btn-sm']
+    ));
+}
+
 $form->display();
 
 if ($prototype) {

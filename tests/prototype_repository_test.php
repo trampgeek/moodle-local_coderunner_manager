@@ -529,4 +529,51 @@ final class prototype_repository_test extends \advanced_testcase {
 
         $this->assertSame((int) FORMAT_PLAIN, $updated->currentversion->documentationformat);
     }
+
+    /**
+     * The usage report counts questions that depend on a prototype through a
+     * descendant as well as directly, because a change to the prototype
+     * reaches them just the same.
+     */
+    public function test_dependants_include_those_reached_through_a_child(): void {
+        global $DB;
+
+        $course = $this->getDataGenerator()->create_course();
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $category = $generator->create_question_category(
+            ['contextid' => \context_course::instance($course->id)->id]
+        );
+
+        $parent = $this->repo->create('parent', SITEID, new override_set([], 'parent'));
+        $child = $this->repo->create('child', SITEID, new override_set([], 'child'), $parent->id);
+
+        // One question on each, so the parent's report must show both.
+        foreach ([$parent->id, $child->id] as $prototypeid) {
+            $question = $generator->create_question('coderunner', null, ['category' => $category->id]);
+            $DB->set_field(
+                'question_coderunner_options',
+                'prototypeid',
+                $prototypeid,
+                ['questionid' => $question->id]
+            );
+        }
+
+        $bycourse = $this->repo->dependants_by_course($parent->id);
+
+        $this->assertCount(1, $bycourse, 'The two questions are in one course.');
+        $this->assertSame((int) $course->id, $bycourse[0]['courseid']);
+        $this->assertSame(2, $bycourse[0]['questions'], 'A question reached through the child was missed.');
+
+        // The child's own report sees only its own.
+        $this->assertSame(1, $this->repo->dependants_by_course($child->id)[0]['questions']);
+    }
+
+    /**
+     * A prototype nothing uses reports nothing, rather than failing.
+     */
+    public function test_a_prototype_with_no_dependants_reports_none(): void {
+        $prototype = $this->repo->create('unused', SITEID, new override_set([], 'unused'));
+
+        $this->assertSame([], $this->repo->dependants_by_course($prototype->id));
+    }
 }

@@ -166,7 +166,14 @@ function print_prototype_row(
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
-    echo html_writer::tag('td', $counts['questions'] ?: '');
+    $usagelink = $counts['questions'] || $counts['children']
+        ? html_writer::link(
+            new moodle_url('/local/coderunner_manager/usage.php', ['id' => $prototype->id]),
+            $counts['questions'] ?: '0',
+            ['title' => get_string('usagereport', 'local_coderunner_manager')]
+        )
+        : '';
+    echo html_writer::tag('td', $usagelink);
     echo html_writer::tag('td', $counts['children'] ?: '');
     echo html_writer::tag('td', s($version ? $version->summary : ''), ['class' => 'w-50']);
     echo html_writer::end_tag('tr');
