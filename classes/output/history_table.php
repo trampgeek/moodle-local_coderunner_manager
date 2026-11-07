@@ -126,7 +126,14 @@ class history_table {
         $user = $version->usermodified ? $DB->get_record('user', ['id' => $version->usermodified]) : null;
 
         $row = \html_writer::start_tag('tr');
-        $row .= \html_writer::tag('td', $version->version);
+        $row .= \html_writer::tag('td', \html_writer::link(
+            new \moodle_url('/local/coderunner_manager/edit.php', [
+                'id' => $prototype->id,
+                'diff' => $version->version,
+            ]),
+            $version->version,
+            ['title' => get_string('viewdiff', 'local_coderunner_manager')]
+        ));
         $row .= \html_writer::tag(
             'td',
             $version->timecreated ? userdate($version->timecreated, get_string('strftimedatetimeshort')) : '',

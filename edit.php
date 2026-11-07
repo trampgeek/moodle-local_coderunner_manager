@@ -24,6 +24,7 @@
 
 use local_coderunner_manager\form\prototype_form;
 use local_coderunner_manager\output\history_table;
+use local_coderunner_manager\output\version_diff;
 use local_coderunner_manager\prototype_repository;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
@@ -35,6 +36,7 @@ $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 $parentid = optional_param('parentid', 0, PARAM_INT);
 $restore = optional_param('restore', 0, PARAM_INT);
+$diff = optional_param('diff', 0, PARAM_INT);
 $allversions = optional_param('allversions', 0, PARAM_BOOL);
 
 $repo = new prototype_repository();
@@ -109,6 +111,14 @@ if ($restore && !$readonly && $prototype) {
     redirect($url, get_string('restoredfromversion', 'local_coderunner_manager', $restore));
 }
 
+// The language the template is highlighted in: resolved from the whole chain,
+// this prototype's own overrides included, or one that sets its own language
+// would get no colouring.
+$resolved = $effectiveparent
+    ? $repo->chain_for($effectiveparent, $own)->resolve()
+    : prototype_chain::from_arrays([$own->to_array()])->resolve();
+$language = (string) $resolved->get('language');
+
 $form = new prototype_form($url, [
     'prototype' => $prototype,
     'inherited' => $inherited,
@@ -116,6 +126,7 @@ $form = new prototype_form($url, [
     'parents' => $parents,
     'courseid' => $courseid,
     'readonly' => $readonly,
+    'language' => $language,
 ]);
 
 if ($form->is_cancelled()) {
@@ -177,15 +188,20 @@ if (!$readonly && ($data = $form->get_data())) {
 // Code and JSON fields are edited in Ace, which the question type ships
 // along with the wrapper that attaches it (decision 22). The template is
 // highlighted in whatever language the prototype resolves to.
-// The language must come from what this prototype resolves to, its own
-// overrides included, or one that sets its own language would get no syntax
-// colouring.
-$resolved = $effectiveparent
-    ? $repo->chain_for($effectiveparent, $own)->resolve()
-    : prototype_chain::from_arrays([$own->to_array()])->resolve();
-settings_form::require_ace(prototype_form::sections(), (string) $resolved->get('language'));
+settings_form::require_ace(prototype_form::sections());
 
 echo $OUTPUT->header();
+
+if ($diff && $prototype) {
+    $history = $repo->history($prototype->id);
+    if (!isset($history[$diff])) {
+        throw new moodle_exception('nosuchversion', 'local_coderunner_manager', '', $diff);
+    }
+    echo version_diff::render($prototype, $history[$diff], $history[$diff - 1] ?? null);
+    echo $OUTPUT->footer();
+    exit;
+}
+
 if ($readonly) {
     echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
 }

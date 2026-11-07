@@ -64,6 +64,9 @@ class prototype_form extends \moodleform {
         $parents = $this->_customdata['parents'];
         // True when the prototype may be read but not changed.
         $readonly = !empty($this->_customdata['readonly']);
+        // The language the template is highlighted in, resolved from the whole
+        // chain including this prototype's own overrides.
+        $language = (string) ($this->_customdata['language'] ?? '');
 
         $mform->addElement('hidden', 'id', $prototype ? $prototype->id : 0);
         $mform->setType('id', PARAM_INT);
@@ -102,7 +105,7 @@ class prototype_form extends \moodleform {
             }
             $header = 'section_' . $section->value;
             $mform->addElement('header', $header, get_string('section' . $section->value, 'local_coderunner_manager'));
-            settings_form::add_section($mform, $section, $inherited, $own);
+            settings_form::add_section($mform, $section, $inherited, $own, $language);
         }
 
         // What this change was.
