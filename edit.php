@@ -53,11 +53,13 @@ if ($courseid == SITEID && !is_siteadmin()) {
     throw new moodle_exception('siteprototypesareadminonly', 'local_coderunner_manager');
 }
 
-// A built-in is rewritten by every CodeRunner release, so an edit to one would
-// be silently lost. It is shown read-only instead of being refused, because
-// someone choosing a prototype needs to see what it sets. Site defaults is the
-// exception: it exists to be edited.
-$readonly = $prototype && $prototype->builtin && !$prototype->issitedefaults;
+// A built-in can be edited, which splits it on save so that the change
+// survives the next release (decision 23). That is an administrator's job, and
+// only from the site prototypes page, where the surrounding text says what the
+// consequences are. Everyone else sees it read-only, which they need: choosing
+// a prototype means seeing what it sets.
+$isbuiltin = $prototype && $prototype->builtin && !$prototype->issitedefaults;
+$readonly = $isbuiltin && !(is_siteadmin() && $courseid == SITEID);
 
 $pageparams = $id ? ['id' => $id] : ['courseid' => $courseid];
 $url = new moodle_url('/local/coderunner_manager/edit.php', $pageparams);
@@ -120,14 +122,24 @@ if (!$readonly && ($data = $form->get_data())) {
     );
     $newparent = empty($data->parentid) ? null : (int) $data->parentid;
 
+    $splitinto = null;
     if ($prototype) {
+        if ($prototype->builtin && !$prototype->issitedefaults) {
+            // The first edit to a built-in splits it: the stock content moves
+            // to a copy that releases keep updating, and this prototype keeps
+            // its id, its children and its questions.
+            $prototype = $repo->split_builtin($prototype);
+            $splitinto = $prototype->parentid();
+        }
         if ($data->name !== $prototype->name) {
             $prototype = $repo->rename($prototype, $data->name);
         }
         $repo->save_new_version(
             $prototype,
+            // A split leaves the stock copy as the parent, which the form did
+            // not know about when it was built.
             $overrides,
-            $newparent,
+            $splitinto ?? $newparent,
             $data->summary,
             $data->documentation,
             $data->commitmessage
@@ -143,6 +155,13 @@ if (!$readonly && ($data = $form->get_data())) {
         );
     }
 
+    if ($splitinto !== null) {
+        redirect($listurl, get_string(
+            'builtinsplit',
+            'local_coderunner_manager',
+            $repo->get_or_fail($splitinto)->name
+        ));
+    }
     redirect($listurl, get_string('prototypesaved', 'local_coderunner_manager', $data->name));
 }
 

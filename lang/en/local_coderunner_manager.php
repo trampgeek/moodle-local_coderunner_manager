@@ -94,3 +94,6 @@ $string['prototypemanager_desc'] = 'Create and edit the prototypes that question
 $string['headerkind'] = 'Kind';
 $string['viewprototype'] = 'View prototype: {$a}';
 $string['builtinreadonly'] = 'This is a built-in prototype. Every CodeRunner release rewrites it, so it cannot be edited here. To build on it, make a child prototype and override only what differs.';
+$string['stockname'] = '{$a} (stock)';
+$string['builtinsplit'] = 'This was a built-in prototype. Your changes are kept in it, and the version CodeRunner ships has been copied to {$a}, which it inherits from. Future CodeRunner releases update that copy, and your changes continue to apply on top of it.';
+$string['splitfrombuiltin'] = 'Separated from the built-in prototype, which was copied to {$a}.';

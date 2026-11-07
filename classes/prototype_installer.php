@@ -48,6 +48,53 @@ class prototype_installer {
     protected array $counts = [];
 
     /**
+     * The namespace that built-in prototype uuids are generated under.
+     *
+     * Any fixed UUID serves; this one was generated once and must never change,
+     * because changing it would make every built-in look new to every site.
+     */
+    const BUILTIN_UUID_NAMESPACE = '6f9b1f1e-5c3a-5a4e-9d3b-2c8e7a1d4b60';
+
+    /**
+     * The uuid a built-in prototype has, derived from its canonical name.
+     *
+     * Built-ins are found by uuid rather than by name, because an
+     * administrator who customises one keeps the name: the edit splits the
+     * prototype, the administrator's copy keeps the name and the id, and the
+     * stock copy is renamed (decision 23). An installer matching on name would
+     * find the customised one and overwrite it.
+     *
+     * The uuid is computed rather than stored, so `db/builtin_PROTOTYPES.xml`
+     * needs no new element — it is still read by the CodeRunner 5 question
+     * importer, and a foreign element in a Moodle XML export invites trouble.
+     * Being a pure function of the name, it is also the same on every
+     * CodeRunner site, which lets a cross-site restore recognise a built-in
+     * with no mapping at all.
+     *
+     * This is a version 5 UUID: SHA-1 over the namespace and the name, with the
+     * version and variant bits set as RFC 4122 requires. Moodle's core\uuid
+     * generates version 4 only, which is random and therefore no use here.
+     *
+     * @param string $name the built-in's canonical name, such as 'python3'.
+     * @return string the uuid.
+     */
+    public static function builtin_uuid(string $name): string {
+        $namespace = str_replace('-', '', self::BUILTIN_UUID_NAMESPACE);
+        $hash = sha1(hex2bin($namespace) . $name);
+
+        return sprintf(
+            '%08s-%04s-%04x-%04x-%12s',
+            substr($hash, 0, 8),
+            substr($hash, 8, 4),
+            // Version 5.
+            (hexdec(substr($hash, 12, 4)) & 0x0fff) | 0x5000,
+            // Variant bits 10xx.
+            (hexdec(substr($hash, 16, 4)) & 0x3fff) | 0x8000,
+            substr($hash, 20, 12)
+        );
+    }
+
+    /**
      * Queue the migration task if the site still needs it.
      *
      * Called from the install step, where the tables have just been created and
@@ -86,7 +133,7 @@ class prototype_installer {
             return false;
         }
 
-        // $checkforexisting, so an upgrade does not stack another copy of a
+        // Checking for an existing task, so an upgrade does not stack another copy of a
         // task that is still waiting to run.
         \core\task\manager::queue_adhoc_task(new task\install_prototypes(), true);
         return true;
@@ -184,7 +231,9 @@ class prototype_installer {
                 legacy_converter::prototype_overrides($columns, $name),
                 legacy_converter::documentation($columns),
                 true,
-                $root->id
+                $root->id,
+                [],
+                self::builtin_uuid($name)
             );
         }
         return $this->counts;
@@ -313,10 +362,13 @@ class prototype_installer {
         string $documentation,
         bool $builtin,
         ?int $parentid = null,
-        array $files = []
+        array $files = [],
+        string $uuid = ''
     ): void {
         $overrides = $this->prune_redundant($overrides, $parentid);
-        $existing = $this->find($name, $courseid);
+        // A built-in is looked up by its uuid, which survives the rename that
+        // a split performs; everything else by name within its scope.
+        $existing = $uuid !== '' ? $this->find_by_uuid($uuid) : $this->find($name, $courseid);
 
         if ($existing === null) {
             if ($this->repo->name_clash($name, $courseid) !== null) {
@@ -335,7 +387,7 @@ class prototype_installer {
                 '',
                 $documentation,
                 $builtin,
-                '',
+                $uuid,
                 false,
                 $files
             );
@@ -439,6 +491,33 @@ class prototype_installer {
      * @param string $name the prototype name.
      * @param int $courseid the scope.
      * @return prototype|null the prototype, or null if there is none.
+     */
+    /**
+     * The built-in prototype carrying this uuid, if there is one.
+     *
+     * A uuid is not unique on a site — a restore may legitimately bring in a
+     * copy — so the built-in flag picks out the stock prototype from any
+     * copies. After a split the administrator's prototype is no longer a
+     * built-in, so it cannot be mistaken for one.
+     *
+     * @param string $uuid the uuid.
+     * @return prototype|null the stock prototype, or null.
+     */
+    protected function find_by_uuid(string $uuid): ?prototype {
+        foreach ($this->repo->find_by_uuid($uuid) as $prototype) {
+            if ($prototype->builtin) {
+                return $prototype;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * An existing prototype of this name in this scope, if there is one.
+     *
+     * @param string $name the name.
+     * @param int $courseid the scope.
+     * @return prototype|null the prototype, or null.
      */
     protected function find(string $name, int $courseid): ?prototype {
         global $DB;

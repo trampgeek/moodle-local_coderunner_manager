@@ -181,6 +181,100 @@ class prototype_repository {
     }
 
     /**
+     * Split a built-in so that an administrator's edit survives upgrades.
+     *
+     * The stock content is copied into a new prototype, flagged built-in and
+     * renamed; the prototype being edited keeps its id, drops the built-in
+     * flag, and becomes a child of the stock copy. Questions refer to
+     * prototypes by id, so every question using it carries on using it, with
+     * nothing re-pointed and no migration.
+     *
+     * Later releases rewrite the stock copy, which the installer finds by its
+     * uuid rather than by name, and the administrator's overrides go on
+     * applying over whatever the stock copy now says. See decision 23.
+     *
+     * @param prototype $builtin the built-in being edited.
+     * @return prototype the same prototype, no longer a built-in, now a child.
+     * @throws \coding_exception if the prototype is not a built-in.
+     */
+    public function split_builtin(prototype $builtin): prototype {
+        global $DB;
+
+        if (!$builtin->builtin) {
+            throw new \coding_exception("Prototype '{$builtin->name}' is not a built-in and cannot be split.");
+        }
+
+        $transaction = $DB->start_delegated_transaction();
+
+        $version = $builtin->currentversion;
+
+        // The stock copy takes the built-in's identity: its uuid, by which the
+        // installer will find it, and a name that says what it is.
+        $stock = $this->create(
+            $this->stock_name($builtin->name, $builtin->courseid),
+            $builtin->courseid,
+            $version ? $version->overrides : new \qtype_coderunner\v6\override_set([], $builtin->name),
+            $version?->parentid,
+            $version?->summary ?? '',
+            $version?->documentation ?? '',
+            true,
+            $builtin->uuid
+        );
+
+        // The prototype being edited is no longer stock. It is given a uuid of
+        // its own, so that the installer cannot mistake it for the built-in.
+        $DB->set_field_select(
+            self::PROTOTYPES,
+            'builtin',
+            0,
+            'id = :id',
+            ['id' => $builtin->id]
+        );
+        $DB->set_field_select(
+            self::PROTOTYPES,
+            'uuid',
+            \core\uuid::generate(),
+            'id = :id',
+            ['id' => $builtin->id]
+        );
+
+        // Re-parenting is a new version, because a prototype's parent is
+        // recorded on its version and not on the prototype itself. The split
+        // is therefore a version of its own in the history, before whatever
+        // change the administrator came to make, which is what the history
+        // should show.
+        $split = $this->save_new_version(
+            $this->get_or_fail($builtin->id),
+            $version ? $version->overrides : new \qtype_coderunner\v6\override_set([], $builtin->name),
+            $stock->id,
+            $version?->summary ?? '',
+            $version?->documentation ?? '',
+            get_string('splitfrombuiltin', 'local_coderunner_manager', $stock->name)
+        );
+
+        $transaction->allow_commit();
+
+        return $split;
+    }
+
+    /**
+     * A free name for the stock copy of a built-in.
+     *
+     * @param string $name the built-in's name.
+     * @param int $courseid the scope.
+     * @return string a name no prototype in that scope is using.
+     */
+    protected function stock_name(string $name, int $courseid): string {
+        $candidate = get_string('stockname', 'local_coderunner_manager', $name);
+        $suffix = 1;
+        while ($this->name_clash($candidate, $courseid) !== null) {
+            $suffix++;
+            $candidate = get_string('stockname', 'local_coderunner_manager', $name) . " ($suffix)";
+        }
+        return $candidate;
+    }
+
+    /**
      * Every prototype descended from the given one, however deep.
      *
      * The parent picker uses this to leave out the choices that would make a

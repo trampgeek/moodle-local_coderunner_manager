@@ -102,8 +102,8 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
     // A built-in is rewritten by every release, so it is not a link: editing it
     // would lose the change.
     if ($prototype->builtin && !$prototype->issitedefaults) {
-        // Not editable, because every release rewrites it, but its settings
-        // still have to be readable by anyone choosing it.
+        // Readable by anyone choosing it, and editable by an administrator
+        // from the site page, where the first save splits it (decision 23).
         return $indent . html_writer::link(
             new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
             $name
