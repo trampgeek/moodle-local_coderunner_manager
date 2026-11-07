@@ -252,4 +252,63 @@ final class prototype_files_test extends \advanced_testcase {
             'filename' => $filename,
         ], $content);
     }
+
+    /**
+     * An empty set of files is not the same as no set at all.
+     *
+     * The editor passes whatever its file manager holds, so an author who
+     * removes every file submits an empty array. That has to clear the files,
+     * where null means "leave them as they are" and carries them forward. Get
+     * the two confused and deleted files come back on the next save.
+     */
+    public function test_an_empty_file_set_clears_the_files(): void {
+        $prototype = $this->repo->create(
+            'p',
+            SITEID,
+            new override_set([], 'p'),
+            null,
+            '',
+            '',
+            false,
+            '',
+            false,
+            [$this->make_file('data.txt', 'content')]
+        );
+        $this->assertCount(1, $this->repo->version_files($prototype, $prototype->currentversion->id));
+
+        $cleared = $this->repo->save_new_version($prototype, new override_set([], 'p'), null, '', '', '', []);
+
+        $this->assertSame(
+            [],
+            $this->repo->version_files($cleared, $cleared->currentversion->id),
+            'An empty file set did not clear the files.'
+        );
+    }
+
+    /**
+     * Passing null leaves the files alone, which is what every caller that
+     * does not manage files relies on.
+     */
+    public function test_a_null_file_set_carries_the_files_forward(): void {
+        $prototype = $this->repo->create(
+            'p',
+            SITEID,
+            new override_set([], 'p'),
+            null,
+            '',
+            '',
+            false,
+            '',
+            false,
+            [$this->make_file('data.txt', 'content')]
+        );
+
+        $next = $this->repo->save_new_version($prototype, new override_set([], 'p'), null, '', '', '', null);
+
+        $this->assertCount(
+            1,
+            $this->repo->version_files($next, $next->currentversion->id),
+            'A null file set did not carry the files forward.'
+        );
+    }
 }

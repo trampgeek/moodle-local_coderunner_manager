@@ -104,6 +104,20 @@ class prototype_form extends \moodleform {
         $mform->setType('documentation', PARAM_RAW);
         $mform->addHelpButton('documentation', 'documentation', 'local_coderunner_manager');
 
+        // Support files. These are a set of files rather than a value, so the
+        // registry-driven component leaves them out and they get a file
+        // manager of their own. A version carries a complete set: whatever is
+        // here when the form is saved is what the new version holds, and a
+        // file removed here is removed from the version.
+        $mform->addElement(
+            'filemanager',
+            'supportfiles',
+            get_string('supportfiles', 'local_coderunner_manager'),
+            null,
+            ['subdirs' => 0, 'accepted_types' => '*']
+        );
+        $mform->addHelpButton('supportfiles', 'supportfiles', 'local_coderunner_manager');
+
         // The settings, section by section, straight from the registry.
         foreach (self::sections() as $section) {
             if (!settings_form::fields_of($section)) {

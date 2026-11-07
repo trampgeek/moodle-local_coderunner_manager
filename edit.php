@@ -119,6 +119,19 @@ $resolved = $effectiveparent
     : prototype_chain::from_arrays([$own->to_array()])->resolve();
 $language = (string) $resolved->get('language');
 
+// The file manager works through a draft area, seeded from the current
+// version's files. A prototype being created has none, and a draft area with
+// no source is simply empty.
+$draftid = file_get_submitted_draft_itemid('supportfiles');
+file_prepare_draft_area(
+    $draftid,
+    $prototype ? $repo->file_contextid($prototype) : $context->id,
+    prototype_repository::COMPONENT,
+    prototype_repository::FILEAREA,
+    $prototype?->currentversion?->id ?: null,
+    ['subdirs' => 0]
+);
+
 $form = new prototype_form($url, [
     'prototype' => $prototype,
     'inherited' => $inherited,
@@ -128,6 +141,8 @@ $form = new prototype_form($url, [
     'readonly' => $readonly,
     'language' => $language,
 ]);
+
+$form->set_data(['supportfiles' => $draftid]);
 
 if ($form->is_cancelled()) {
     redirect($listurl);
@@ -145,6 +160,19 @@ if (!$readonly && ($data = $form->get_data())) {
     // An editor element submits an array of text and format.
     $documentation = $data->documentation['text'] ?? '';
     $documentationformat = (int) ($data->documentation['format'] ?? FORMAT_HTML);
+
+    // Whatever is in the draft area is what the new version holds. An empty
+    // array is meaningful — the author removed every file — so it is passed
+    // as an array and not folded into null, which would carry the old set
+    // forward instead.
+    $submittedfiles = array_values(get_file_storage()->get_area_files(
+        context_user::instance($USER->id)->id,
+        'user',
+        'draft',
+        $data->supportfiles,
+        'filename',
+        false
+    ));
 
     $splitinto = null;
     if ($prototype) {
@@ -167,7 +195,7 @@ if (!$readonly && ($data = $form->get_data())) {
             $data->summary,
             $documentation,
             $data->commitmessage,
-            null,
+            $submittedfiles,
             $documentationformat
         );
     } else {
@@ -181,7 +209,7 @@ if (!$readonly && ($data = $form->get_data())) {
             false,
             '',
             false,
-            [],
+            $submittedfiles,
             $documentationformat
         );
     }

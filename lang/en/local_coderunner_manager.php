@@ -120,3 +120,5 @@ $string['diffafter'] = 'After';
 $string['diffnotset'] = 'not set';
 $string['diffempty'] = 'empty';
 $string['viewdiff'] = 'See what changed';
+$string['supportfiles'] = 'Support files';
+$string['supportfiles_help'] = 'Files made available to every question that uses this prototype, alongside the question\'s own support files. A question\'s own file of the same name wins, and so does a nearer prototype\'s, so a child prototype can replace one of its parent\'s files without copying the rest.';

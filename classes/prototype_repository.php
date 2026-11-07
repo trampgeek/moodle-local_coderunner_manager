@@ -876,7 +876,7 @@ class prototype_repository {
      * @param prototype $prototype the prototype.
      * @return int the context id.
      */
-    protected function file_contextid(prototype $prototype): int {
+    public function file_contextid(prototype $prototype): int {
         return \context_course::instance($prototype->courseid)->id;
     }
 
