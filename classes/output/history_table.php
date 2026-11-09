@@ -121,7 +121,7 @@ class history_table {
 
         $changes = $previous === null
             ? get_string('firstversion', 'local_coderunner_manager')
-            : self::describe($version->overrides->differences_from($previous->overrides));
+            : self::describe($version->changes_from($previous));
 
         $user = $version->usermodified ? $DB->get_record('user', ['id' => $version->usermodified]) : null;
 
@@ -169,6 +169,21 @@ class history_table {
      * @param array $differences from override_set::differences_from().
      * @return string the rendered description.
      */
+    /**
+     * A changed item's label.
+     *
+     * The parent is reported alongside the fields but is not one of them, so
+     * it has no registry entry to take a label from.
+     *
+     * @param string $name the field name, or 'parentid'.
+     * @return string the label.
+     */
+    protected static function change_label(string $name): string {
+        return $name === 'parentid'
+            ? get_string('parentprototype', 'local_coderunner_manager')
+            : field_registry::get($name)->label();
+    }
+
     protected static function describe(array $differences): string {
         if (!$differences) {
             return \html_writer::tag(
@@ -183,7 +198,7 @@ class history_table {
         foreach ($differences as $name => $difference) {
             $parts[] = \html_writer::tag(
                 'span',
-                s(field_registry::get($name)->label()),
+                s(self::change_label($name)),
                 ['class' => $classes[$difference['change']] ?? '']
             );
         }

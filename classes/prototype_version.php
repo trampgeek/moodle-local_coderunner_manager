@@ -70,6 +70,39 @@ final readonly class prototype_version {
      *
      * @return bool true if it derives from no other prototype.
      */
+    /**
+     * What changed between this version and the one before it, the parent
+     * included.
+     *
+     * The parent is not a field of the override set, so comparing override
+     * sets alone reports a reparenting as no change at all — which is exactly
+     * what it looked like: a prototype moved under a new parent, gaining a
+     * different template and different support files by inheritance, and its
+     * history said *No fields changed*. It is the one change that alters every
+     * resolved value without touching a single override, so it is reported
+     * first, under its own name.
+     *
+     * @param prototype_version|null $previous the version before this one.
+     * @return array in the shape override_set::differences_from() returns,
+     *      keyed by field name, with 'parentid' first when it changed.
+     */
+    public function changes_from(?prototype_version $previous): array {
+        if ($previous === null) {
+            return [];
+        }
+
+        $differences = [];
+        if ((int) $this->parentid !== (int) $previous->parentid) {
+            $differences['parentid'] = [
+                'change' => 'changed',
+                'from' => $previous->parentid,
+                'to' => $this->parentid,
+            ];
+        }
+
+        return $differences + $this->overrides->differences_from($previous->overrides);
+    }
+
     public function is_root(): bool {
         return $this->parentid === null;
     }

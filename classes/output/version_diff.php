@@ -70,7 +70,7 @@ class version_diff {
 
         $differences = $previous === null
             ? self::everything($version)
-            : $version->overrides->differences_from($previous->overrides);
+            : $version->changes_from($previous);
 
         if (!$differences) {
             $out .= \html_writer::tag('p', get_string('nochangesrecorded', 'local_coderunner_manager'));
@@ -88,16 +88,54 @@ class version_diff {
             $out .= \html_writer::start_tag('tr');
             $out .= \html_writer::tag(
                 'td',
-                s(field_registry::get($name)->label()),
+                s(self::change_label($name)),
                 ['class' => 'text-nowrap font-weight-bold']
             );
-            $out .= \html_writer::tag('td', self::value($difference['from']), ['class' => 'w-50']);
-            $out .= \html_writer::tag('td', self::value($difference['to']), ['class' => 'w-50']);
+            $out .= \html_writer::tag('td', self::change_value($name, $difference['from']), ['class' => 'w-50']);
+            $out .= \html_writer::tag('td', self::change_value($name, $difference['to']), ['class' => 'w-50']);
             $out .= \html_writer::end_tag('tr');
         }
 
         $out .= \html_writer::end_tag('table');
         return $out . \html_writer::tag('p', $back);
+    }
+
+    /**
+     * A changed item's value, before or after.
+     *
+     * The parent is stored as an id, which says nothing to a reader, so it is
+     * shown by name. A prototype that has since been deleted keeps its id, as
+     * the honest answer to what the version recorded.
+     *
+     * @param string $name the field name, or 'parentid'.
+     * @param mixed $value the value.
+     * @return string the rendered value.
+     */
+    protected static function change_value(string $name, $value): string {
+        if ($name !== 'parentid') {
+            return self::value($value);
+        }
+        if (empty($value)) {
+            return self::value(get_string('noparent', 'local_coderunner_manager'));
+        }
+
+        $parent = (new \local_coderunner_manager\prototype_repository())->get((int) $value);
+        return self::value($parent ? $parent->name : $value);
+    }
+
+    /**
+     * A changed item's label.
+     *
+     * The parent is reported alongside the fields but is not one of them, so
+     * it has no registry entry to take a label from.
+     *
+     * @param string $name the field name, or 'parentid'.
+     * @return string the label.
+     */
+    protected static function change_label(string $name): string {
+        return $name === 'parentid'
+            ? get_string('parentprototype', 'local_coderunner_manager')
+            : field_registry::get($name)->label();
     }
 
     /**
