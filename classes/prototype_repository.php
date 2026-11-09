@@ -264,6 +264,60 @@ class prototype_repository {
      * @param int $courseid the scope.
      * @return string a name no prototype in that scope is using.
      */
+    /**
+     * A built-in of this canonical name, whatever uuid it happens to carry.
+     *
+     * The installer identifies a built-in by a uuid derived from its name
+     * (decision 23), which is only useful if the stored uuid was derived the
+     * same way. Built-ins installed before that scheme carry a random version
+     * 4 uuid instead, so the installer cannot find them and treats each as a
+     * new prototype whose name is taken — leaving `install_builtins()` inert,
+     * silently, for every future release. This is the way back: find it by
+     * name, in either the plain or the split-off stock form, and only if it is
+     * still flagged built-in, so that the half of a split which holds the name
+     * but is no longer stock is never mistaken for it.
+     *
+     * @param string $name the built-in's canonical name.
+     * @param int $courseid the scope, which for a built-in is the site.
+     * @return prototype|null the built-in, or null if there is none.
+     */
+    public function find_builtin_by_name(string $name, int $courseid): ?prototype {
+        global $DB;
+
+        $records = $DB->get_records_select(
+            self::PROTOTYPES,
+            'builtin = 1 AND courseid = :courseid AND (name = :name OR ' . $DB->sql_like('name', ':stock') . ')',
+            [
+                'courseid' => $courseid,
+                'name' => $name,
+                'stock' => $DB->sql_like_escape(get_string('stockname', 'local_coderunner_manager', $name)) . '%',
+            ],
+            'name',
+            '*',
+            0,
+            1
+        );
+
+        $found = $this->prototypes_from_records($records);
+        return $found ? reset($found) : null;
+    }
+
+    /**
+     * Give a prototype the uuid it should have had.
+     *
+     * Used only to repair a built-in whose uuid predates the derived scheme.
+     * The uuid is identity rather than content, so this is a field update and
+     * not a new version: nothing about what the prototype *says* has changed.
+     *
+     * @param prototype $prototype the prototype to repair.
+     * @param string $uuid the uuid it should carry.
+     */
+    public function adopt_uuid(prototype $prototype, string $uuid): void {
+        global $DB;
+
+        $DB->set_field(self::PROTOTYPES, 'uuid', $uuid, ['id' => $prototype->id]);
+    }
+
     protected function stock_name(string $name, int $courseid): string {
         $candidate = get_string('stockname', 'local_coderunner_manager', $name);
         $suffix = 1;

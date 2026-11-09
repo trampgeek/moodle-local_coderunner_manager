@@ -229,15 +229,52 @@ class prototype_installer {
                 $name,
                 SITEID,
                 legacy_converter::prototype_overrides($columns, $name),
-                legacy_converter::documentation($columns),
+                self::builtin_documentation($name, $columns),
                 true,
                 $root->id,
                 [],
                 self::builtin_uuid($name),
-                legacy_converter::documentation_format($columns)
+                legacy_converter::documentation_format($columns),
+                self::builtin_summary($name)
             );
         }
         return $this->counts;
+    }
+
+    /**
+     * A built-in's documentation, which lives in the question type's language
+     * strings rather than in `db/builtin_PROTOTYPES.xml`.
+     *
+     * The question text of a built-in's prototype question says only "Built-in
+     * prototypes are documented in the language strings", which was true of
+     * CodeRunner 5, where the authoring form looked the string up to fill its
+     * Details panel. Converted literally it makes a prototype whose
+     * documentation tells an author to go and read something else, so the
+     * string is read here and stored as the documentation it describes.
+     *
+     * @param string $name the built-in's canonical name.
+     * @param array $columns its columns, for the fallback.
+     * @return string the documentation.
+     */
+    protected static function builtin_documentation(string $name, array $columns): string {
+        $id = 'qtype_' . $name;
+        return get_string_manager()->string_exists($id, 'qtype_coderunner')
+            ? get_string($id, 'qtype_coderunner')
+            : legacy_converter::documentation($columns);
+    }
+
+    /**
+     * A built-in's one-line summary, which is what the picker and the library
+     * show beside its name.
+     *
+     * @param string $name the built-in's canonical name.
+     * @return string the summary, or an empty string if none is written yet.
+     */
+    protected static function builtin_summary(string $name): string {
+        $id = 'qtype_' . $name . '_summary';
+        return get_string_manager()->string_exists($id, 'qtype_coderunner')
+            ? get_string($id, 'qtype_coderunner')
+            : '';
     }
 
     /**
@@ -357,6 +394,11 @@ class prototype_installer {
      * @param bool $builtin whether it ships with CodeRunner.
      * @param int|null $parentid the prototype it derives from, normally Site defaults.
      * @param \stored_file[] $files support files to attach.
+     * @param int $documentationformat the format the documentation is written in.
+     * @param string $summary the one-line summary the picker shows beside the
+     *      name. Written only when the prototype has none: an author's own
+     *      summary is theirs, and a later run of the installer must not
+     *      overwrite it.
      */
     protected function upsert(
         string $name,
@@ -367,12 +409,26 @@ class prototype_installer {
         ?int $parentid = null,
         array $files = [],
         string $uuid = '',
-        int $documentationformat = FORMAT_HTML
+        int $documentationformat = FORMAT_HTML,
+        string $summary = ''
     ): void {
         $overrides = $this->prune_redundant($overrides, $parentid);
         // A built-in is looked up by its uuid, which survives the rename that
-        // a split performs; everything else by name within its scope.
-        $existing = $uuid !== '' ? $this->find_by_uuid($uuid) : $this->find($name, $courseid);
+        // a split performs; everything else by name within its scope. A
+        // built-in whose uuid predates the derived scheme is found by name
+        // instead and has the derived uuid written to it, so that this run and
+        // every later one can find it the intended way.
+        if ($uuid === '') {
+            $existing = $this->find($name, $courseid);
+        } else {
+            $existing = $this->find_by_uuid($uuid);
+            if ($existing === null) {
+                $existing = $this->repo->find_builtin_by_name($name, $courseid);
+                if ($existing !== null) {
+                    $this->repo->adopt_uuid($existing, $uuid);
+                }
+            }
+        }
 
         if ($existing === null) {
             if ($this->repo->name_clash($name, $courseid) !== null) {
@@ -388,7 +444,7 @@ class prototype_installer {
                 $courseid,
                 $overrides,
                 $parentid,
-                '',
+                $summary,
                 $documentation,
                 $builtin,
                 $uuid,
@@ -400,7 +456,13 @@ class prototype_installer {
             return;
         }
 
-        if ($this->unchanged($existing, $overrides, $documentation, $files)) {
+        // An author's own summary wins; one supplied here fills a blank.
+        $keptsummary = $existing->currentversion->summary !== ''
+            ? $existing->currentversion->summary
+            : $summary;
+
+        if ($this->unchanged($existing, $overrides, $documentation, $files)
+                && $keptsummary === $existing->currentversion->summary) {
             $this->counts['unchanged']++;
             return;
         }
@@ -409,7 +471,7 @@ class prototype_installer {
             $existing,
             $overrides,
             $existing->parentid(),
-            $existing->currentversion->summary,
+            $keptsummary,
             $documentation,
             get_string('installerupdated', 'local_coderunner_manager'),
             $files ?: null,
