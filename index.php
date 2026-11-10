@@ -93,23 +93,27 @@ foreach ($prototypes as $prototype) {
  * @param int $depth how deep in the tree it sits.
  * @return string the rendered cell.
  */
-function prototype_name_cell(prototype $prototype, int $depth): string {
+function prototype_name_cell(prototype $prototype, int $depth, int $vantage): string {
     $indent = str_repeat('&nbsp;', $depth * 4);
     $name = s($prototype->name);
 
-    if (!prototype_candidates::may_edit($prototype)) {
-        // Named, but not offered: a built-in and every other site prototype is
-        // an administrator's to change, and the row still has to say what the
-        // prototype is and what uses it.
-        return $indent . $name;
+    // Every row is a link, because every row can be read: an author needs to
+    // see what a prototype sets in order to build on it, and the editor shows
+    // a prototype they may not change read-only. The course they are in
+    // travels with the link, since that is where the right to read it comes
+    // from — the capability is theirs at course level, not at system level.
+    $params = ['id' => $prototype->id];
+    if ((int) $prototype->courseid !== $vantage) {
+        $params['courseid'] = $vantage;
     }
+    $link = html_writer::link(new moodle_url('/local/coderunner_manager/edit.php', $params), $name);
 
-    // Site defaults sits under every question on the server, so it is editable
-    // only from the site prototypes page, where the surrounding text says what
-    // the consequences are. Offering the same link from a course page invites
-    // an administrator to change every course while thinking about one.
-    global $COURSE;
-    if ($prototype->issitedefaults && $COURSE->id != SITEID) {
+    // Site defaults sits under every question on the server, so an
+    // administrator changes it only from the site prototypes page, where the
+    // surrounding text says what the consequences are. Offering the same link
+    // from a course page invites them to change every course while thinking
+    // about one.
+    if ($prototype->issitedefaults && $vantage != SITEID && prototype_candidates::may_edit($prototype)) {
         return $indent . $name . ' ' . html_writer::link(
             new moodle_url('/local/coderunner_manager/index.php'),
             get_string('editatsitelevel', 'local_coderunner_manager'),
@@ -117,10 +121,7 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
         );
     }
 
-    return $indent . html_writer::link(
-        new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
-        $name
-    );
+    return $indent . $link;
 }
 
 /**
@@ -135,10 +136,11 @@ function print_prototype_row(
     array $childrenof,
     array $usage,
     array $coursenames,
+    int $vantage,
     int $depth = 0
 ): void {
     $version = $prototype->currentversion;
-    $label = prototype_name_cell($prototype, $depth);
+    $label = prototype_name_cell($prototype, $depth, $vantage);
 
     // Built-ins are created at site scope and stay there, even the stock copy
     // a split leaves behind, so saying so in the scope cell costs nothing and
@@ -178,7 +180,7 @@ function print_prototype_row(
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
-        print_prototype_row($child, $childrenof, $usage, $coursenames, $depth + 1);
+        print_prototype_row($child, $childrenof, $usage, $coursenames, $vantage, $depth + 1);
     }
 }
 
@@ -189,7 +191,7 @@ foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children',
 }
 echo html_writer::end_tag('tr');
 foreach ($childrenof[0] ?? [] as $root) {
-    print_prototype_row($root, $childrenof, $usage, $coursenames);
+    print_prototype_row($root, $childrenof, $usage, $coursenames, (int) ($courseid ?: SITEID));
 }
 echo html_writer::end_tag('table');
 

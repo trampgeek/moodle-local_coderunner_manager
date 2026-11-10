@@ -25,6 +25,7 @@
 use local_coderunner_manager\form\prototype_form;
 use local_coderunner_manager\output\history_table;
 use local_coderunner_manager\output\version_diff;
+use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
@@ -48,34 +49,62 @@ $allversions = optional_param('allversions', 0, PARAM_BOOL);
 
 $repo = new prototype_repository();
 $prototype = $id ? $repo->get_or_fail($id) : null;
-if ($prototype) {
-    $courseid = $prototype->courseid;
-}
-$courseid = $courseid ?: SITEID;
 
-require_login($courseid == SITEID ? null : $courseid);
-$context = $courseid == SITEID ? context_system::instance() : context_course::instance($courseid);
+// Two courses matter here and they are not the same one.
+//
+// The prototype's **scope** is where it lives and what it belongs to: it
+// decides whose library it is listed in, which parents it may choose, where
+// its support files are stored, and who may change it.
+//
+// The author's **vantage** is the course they are working in, which is where
+// the right to *read* it comes from. A prototype is of no use to an author who
+// cannot see what it sets, and a course's library lists the site prototypes
+// beside the course's own, so reading one has to be possible for anyone who
+// may build a question on it — which is the capability in their own course,
+// not at system level, where a teacher does not hold it. The question form
+// already shows them every value a site prototype supplies, in the controls of
+// any question built on it, so this discloses nothing new; what it adds is the
+// change history and the support file list.
+$scope = $prototype ? (int) $prototype->courseid : ($courseid ?: (int) SITEID);
+$vantage = $courseid ?: $scope;
+
+require_login($vantage == SITEID ? null : $vantage);
+$context = $vantage == SITEID ? context_system::instance() : context_course::instance($vantage);
 require_capability('qtype/coderunner:management', $context);
 
-// A site prototype is every course's business, so editing one is reserved to
-// administrators, as design section 8 intends. The capability is declared at
-// course level, which governs where it can be overridden, not where it can be
-// tested, so it cannot carry this on its own.
-if ($courseid == SITEID && !is_siteadmin()) {
+// Creating one is a different matter from reading one: a site prototype is
+// every course's business, so only an administrator may add to that library
+// (design section 8). The capability is declared at course level, which governs
+// where it can be overridden rather than where it can be tested, so it cannot
+// carry this on its own.
+if (!$prototype && $scope == SITEID && !is_siteadmin()) {
     throw new moodle_exception('siteprototypesareadminonly', 'local_coderunner_manager');
 }
 
-// A built-in can be edited, which splits it on save so that the change
-// survives the next release (decision 23). That is an administrator's job, and
-// only from the site prototypes page, where the surrounding text says what the
-// consequences are. Everyone else sees it read-only, which they need: choosing
-// a prototype means seeing what it sets.
+// Whether this author may change what they are looking at, asked once, in the
+// same place the prototype list asks it when deciding what to offer a link to.
+// A built-in can be changed, which splits it on save so that the change
+// survives the next release (decision 23), and that is an administrator's job
+// like any other change to a site prototype.
 $isbuiltin = $prototype && $prototype->builtin && !$prototype->issitedefaults;
-$readonly = $isbuiltin && !(is_siteadmin() && $courseid == SITEID);
+$readonly = $prototype && !prototype_candidates::may_edit($prototype);
 
-$pageparams = $id ? ['id' => $id] : ['courseid' => $courseid];
+$pageparams = $id ? ['id' => $id] : ['courseid' => $scope];
+if ($id && $vantage != $scope) {
+    // Kept on the page's own URL so that a reload, a diff or a publish stays
+    // in the course the author came from.
+    $pageparams['courseid'] = $vantage;
+}
 $url = new moodle_url('/local/coderunner_manager/edit.php', $pageparams);
-$listurl = new moodle_url('/local/coderunner_manager/index.php', $courseid == SITEID ? [] : ['courseid' => $courseid]);
+$listurl = new moodle_url(
+    '/local/coderunner_manager/index.php',
+    $vantage == SITEID ? [] : ['courseid' => $vantage]
+);
+
+// The prototype's own context, which is where its support files live and what
+// a new one is created in. Distinct from $context, which is the author's
+// vantage and decides what the page may be used for.
+$scopecontext = $scope == SITEID ? context_system::instance() : context_course::instance($scope);
 
 $PAGE->set_url($url);
 $PAGE->set_context($context);
@@ -110,7 +139,7 @@ $own = $editing ? $editing->overrides : new override_set([], $prototype->name ??
 // and anything descended from it, which would make a cycle.
 $parents = [0 => get_string('noparent', 'local_coderunner_manager')];
 $descendants = $prototype ? $repo->descendant_ids($prototype->id) : [];
-foreach ($repo->list_for_course($courseid) as $candidate) {
+foreach ($repo->list_for_course($scope) as $candidate) {
     if ($prototype && ($candidate->id == $prototype->id || in_array($candidate->id, $descendants, true))) {
         continue;
     }
@@ -143,7 +172,7 @@ $language = (string) $resolved->get('language');
 $draftid = file_get_submitted_draft_itemid('supportfiles');
 file_prepare_draft_area(
     $draftid,
-    $prototype ? $repo->file_contextid($prototype) : $context->id,
+    $prototype ? $repo->file_contextid($prototype) : $scopecontext->id,
     prototype_repository::COMPONENT,
     prototype_repository::FILEAREA,
     // Seeded from the version being edited, draft included: a version carries
@@ -160,7 +189,7 @@ $form = new prototype_form($url, [
     'own' => $own,
     'parentid' => $effectiveparent ?? 0,
     'parents' => $parents,
-    'courseid' => $courseid,
+    'courseid' => $scope,
     'readonly' => $readonly,
     'language' => $language,
 ]);
@@ -227,7 +256,7 @@ if (!$readonly && ($data = $form->get_data())) {
     } else {
         $repo->create(
             $data->name,
-            $courseid,
+            $scope,
             $overrides,
             $newparent,
             $data->summary,
@@ -277,7 +306,15 @@ if ($diff && $prototype) {
 }
 
 if ($readonly) {
-    echo $OUTPUT->notification(get_string('builtinreadonly', 'local_coderunner_manager'), 'notifymessage');
+    // A built-in says what editing it would do, since that is the surprising
+    // part; any other site prototype just says whose it is.
+    echo $OUTPUT->notification(
+        get_string(
+            $isbuiltin ? 'builtinreadonly' : 'siteprototypereadonly',
+            'local_coderunner_manager'
+        ),
+        'notifymessage'
+    );
 }
 if ($prototype && $prototype->has_draft()) {
     // What publishing would affect, shown with the button rather than after

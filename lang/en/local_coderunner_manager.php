@@ -81,6 +81,7 @@ $string['sectionsandbox'] = 'Sandbox, languages and limits';
 $string['sectiontemplate'] = 'Template and grader';
 $string['sectiontestcasefields'] = 'Test case fields';
 $string['sectionui'] = 'User interface';
+$string['siteprototypereadonly'] = 'This is a site prototype, shown read-only: it belongs to the whole server rather than to one course, so only a site administrator can change it. Everything it sets is listed below, and you can build a child prototype of it in your own course.';
 $string['siteprototypesareadminonly'] = 'Only site administrators may edit site prototypes, because every course depends on them.';
 $string['summary'] = 'One-line summary';
 $string['summary_help'] = 'A single sentence describing what this prototype is for. It is shown beside the prototype in the picker and in the library, so it should say what distinguishes it from its parent.';
