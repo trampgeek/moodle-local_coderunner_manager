@@ -247,6 +247,26 @@ class prototype_candidates {
     }
 
     /**
+     * Whether the user may create a prototype in the given course.
+     *
+     * Not the same question as {@see may_use_course()}, which asks whether a
+     * course's prototypes may be *built on*: every author may build on a site
+     * prototype, and none but an administrator may add one, exactly as
+     * {@see may_edit()} reserves editing them. A course prototype needs the
+     * capability in that course.
+     *
+     * @param int $courseid the course the prototype would belong to.
+     * @return bool true if they may.
+     */
+    public function may_create_in_course(int $courseid): bool {
+        if ($courseid === (int) SITEID) {
+            return is_siteadmin();
+        }
+        $context = \context_course::instance($courseid, IGNORE_MISSING);
+        return $context && has_capability(self::CAPABILITY, $context);
+    }
+
+    /**
      * Whether the user may build a question on the given course's prototypes.
      *
      * @param int $courseid the course the prototype belongs to.
