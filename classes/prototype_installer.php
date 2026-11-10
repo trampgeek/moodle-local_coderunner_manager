@@ -133,10 +133,27 @@ class prototype_installer {
             return false;
         }
 
-        // Checking for an existing task, so an upgrade does not stack another copy of a
-        // task that is still waiting to run.
-        \core\task\manager::queue_adhoc_task(new task\install_prototypes(), true);
+        self::queue_migration();
         return true;
+    }
+
+    /**
+     * Queue the install and migration task, whatever the state of the data.
+     *
+     * For the caller that knows the task is wanted and cannot prove it from a
+     * query. A course restored from a pre-6.0 backup is the case: its
+     * questions are converted as they arrive, so they have overrides
+     * documents, but the ones built on the course's own prototypes have no
+     * prototype id yet because the prototype questions they name have not been
+     * snapshotted into the manager. The restore knows that happened;
+     * {@see queue_migration_if_needed()} cannot tell such a question from one
+     * that is simply broken, of which a real site has hundreds, and would
+     * queue the task on every upgrade for ever if it tried.
+     */
+    public static function queue_migration(): void {
+        // Checking for an existing task, so a second caller does not stack
+        // another copy of a task that is still waiting to run.
+        \core\task\manager::queue_adhoc_task(new task\install_prototypes(), true);
     }
 
     /**

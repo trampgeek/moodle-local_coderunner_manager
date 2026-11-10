@@ -89,15 +89,30 @@ class question_migrator {
         $this->counts = ['converted' => 0, 'broken' => 0, 'skipped' => 0, 'reasons' => []];
         $this->build_indexes();
 
+        // Two kinds of row are wanted. One has no overrides document and has
+        // never been converted. The other has a document but no prototype id,
+        // which is a question whose name could not be resolved when it was
+        // written -- and the case that matters is a course restored from a
+        // pre-6.0 backup, where the questions are converted as they arrive but
+        // the course's own prototype questions have not yet been snapshotted
+        // into the manager, so there is nothing of that name to resolve
+        // against. Once the snapshot has run, the reference can be made.
+        //
+        // A question that is simply broken -- no prototype of its name
+        // anywhere -- is in the second set too, and is re-examined on every
+        // run. That is cheap and it is the honest reading: nothing else
+        // distinguishes a question waiting for its prototype from one that
+        // will never have it.
+        $pending = 'overrides IS NULL OR prototypeid IS NULL';
         $total = $DB->count_records_select(
             self::OPTIONS,
-            'prototypetype = 0' . ($force ? '' : ' AND overrides IS NULL')
+            'prototypetype = 0' . ($force ? '' : " AND ($pending)")
         );
         if ($total === 0) {
             return $this->counts;
         }
 
-        $select = 'qco.prototypetype = 0' . ($force ? '' : ' AND qco.overrides IS NULL');
+        $select = 'qco.prototypetype = 0' . ($force ? '' : " AND (qco.$pending)");
         $rs = $DB->get_recordset_sql("
             SELECT qco.*, qc.contextid
               FROM {" . self::OPTIONS . "} qco
@@ -111,7 +126,7 @@ class question_migrator {
         $batch = [];
         $done = 0;
         foreach ($rs as $row) {
-            $batch[] = $this->convert_row($row);
+            $batch[] = $this->convert_row($row, $force);
             $done++;
 
             if (count($batch) >= self::BATCH_SIZE) {
@@ -137,10 +152,19 @@ class question_migrator {
     /**
      * Convert one options row, without writing it.
      *
+     * A row that already has an overrides document keeps it, and only its
+     * prototype reference is resolved. That is what the restore case needs,
+     * and it is also the one place the two converters are not inverses: an
+     * author who clears a pinned field's override leaves columns that describe
+     * the same question without recording that the value is inherited, so
+     * re-converting such a row would pin the field again. Forcing re-converts
+     * regardless, which is what forcing is for.
+     *
      * @param \stdClass $row the options row, with its question's context id.
+     * @param bool $force re-convert the overrides document as well.
      * @return \stdClass an update with id, prototypeid and overrides.
      */
-    protected function convert_row(\stdClass $row): \stdClass {
+    protected function convert_row(\stdClass $row, bool $force = false): \stdClass {
         $prototypeid = $this->resolve_prototype($row);
         if ($prototypeid === null) {
             $this->counts['broken']++;
@@ -150,12 +174,15 @@ class question_migrator {
             $this->counts['converted']++;
         }
 
-        $overrides = legacy_converter::question_overrides((array) $row);
+        $hasdocument = ($row->overrides ?? '') !== '';
+        $overrides = $hasdocument && !$force
+            ? $row->overrides
+            : json_encode(legacy_converter::question_overrides((array) $row)->to_array());
 
         return (object) [
             'id' => $row->id,
             'prototypeid' => $prototypeid,
-            'overrides' => json_encode($overrides->to_array()),
+            'overrides' => $overrides,
         ];
     }
 

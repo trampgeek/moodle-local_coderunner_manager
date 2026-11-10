@@ -226,6 +226,42 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
     }
 
     /**
+     * A question that has its overrides document but no prototype id has its
+     * reference resolved on a later run, and its document left alone.
+     *
+     * This is the restored course. A pre-6.0 backup's questions are converted
+     * as they arrive, so they have documents; but those built on the course's
+     * own prototypes have no prototype id, because the prototype questions
+     * they name are only snapshotted into the manager when this task runs.
+     * Selecting on a missing document alone would have skipped them for ever,
+     * leaving every question in the restored course broken.
+     */
+    public function test_a_question_awaiting_its_prototype_is_resolved_later(): void {
+        global $DB;
+
+        // The state a restore leaves: converted, but nothing of that name to
+        // point at yet, because the prototype question has not been snapshotted.
+        $this->make_prototype_question('restored_type');
+        $question = $this->make_plain_question('restored_type');
+        $document = json_encode(['penaltyregime' => '0, 10, 20, ...']);
+        $DB->set_field('question_coderunner_options', 'prototypeid', null, ['questionid' => $question->id]);
+        $DB->set_field('question_coderunner_options', 'overrides', $document, ['questionid' => $question->id]);
+
+        // What the task does, in its order: snapshot, then sweep.
+        (new prototype_installer())->snapshot_user_prototypes();
+        $counts = (new question_migrator())->migrate();
+
+        $row = $DB->get_record('question_coderunner_options', ['questionid' => $question->id]);
+        $this->assertNotNull($row->prototypeid, 'The reference was never resolved.');
+        $this->assertSame(
+            $document,
+            $row->overrides,
+            'The document it was restored with was rewritten.'
+        );
+        $this->assertGreaterThan(0, $counts['converted']);
+    }
+
+    /**
      * The migration adds to the row and changes nothing that was there, so the
      * old columns remain available to verify against and to re-run from.
      */
