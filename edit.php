@@ -36,7 +36,10 @@ require_once($CFG->libdir . '/filelib.php');
 
 $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
-$parentid = optional_param('parentid', 0, PARAM_INT);
+// The parent, either as a link's request to create a child of it or as the
+// menu's current choice on a reload. -1 says the page was given neither, which
+// is not the same as 0 — the author choosing *No parent*.
+$parentid = optional_param('parentid', -1, PARAM_INT);
 $restore = optional_param('restore', 0, PARAM_INT);
 $publish = optional_param('publish', 0, PARAM_BOOL);
 $discard = optional_param('discard', 0, PARAM_BOOL);
@@ -89,7 +92,11 @@ $PAGE->navbar->add(get_string('prototypelist', 'local_coderunner_manager'), $lis
 $PAGE->navbar->add($title);
 
 // What the prototype inherits: its parent chain, without the prototype itself.
-$effectiveparent = $prototype ? $prototype->parentid() : ($parentid ?: $repo->site_defaults()?->id);
+$effectiveparent = prototype_form::effective_parentid(
+    $prototype,
+    $parentid < 0 ? null : $parentid,
+    $repo->site_defaults()?->id
+);
 $inherited = $effectiveparent
     ? $repo->chain_for($effectiveparent)->resolve()
     : (new prototype_chain([]))->resolve();
@@ -139,14 +146,19 @@ file_prepare_draft_area(
     $prototype ? $repo->file_contextid($prototype) : $context->id,
     prototype_repository::COMPONENT,
     prototype_repository::FILEAREA,
-    $prototype?->currentversion?->id ?: null,
+    // Seeded from the version being edited, draft included: a version carries
+    // a complete set of files, and seeding from the published one instead
+    // showed an author continuing a draft the files the draft replaced.
+    $editing?->id ?: null,
     ['subdirs' => 0]
 );
 
 $form = new prototype_form($url, [
     'prototype' => $prototype,
+    'editing' => $editing,
     'inherited' => $inherited,
     'own' => $own,
+    'parentid' => $effectiveparent ?? 0,
     'parents' => $parents,
     'courseid' => $courseid,
     'readonly' => $readonly,
@@ -245,6 +257,12 @@ if (!$readonly && ($data = $form->get_data())) {
 // along with the wrapper that attaches it (decision 22). The template is
 // highlighted in whatever language the prototype resolves to.
 settings_form::require_ace(prototype_form::sections());
+
+// And the script that rebuilds the form when the author changes the parent, so
+// that what each field inherits is the new parent's before anything is saved.
+if (!$readonly) {
+    prototype_form::require_reload_on_change();
+}
 
 echo $OUTPUT->header();
 

@@ -33,12 +33,15 @@ namespace local_coderunner_manager;
  * type's picker only renders what this produces (design section 5).
  *
  * Three groups are offered by default, and they are a partition rather than
- * three overlapping lists:
+ * three overlapping lists. They are drawn by **scope**, which is the line the
+ * author's own library follows: a child prototype is made in the same course
+ * as its parent, so a group is a whole subtree rather than a slice through
+ * one. An empty group is not offered at all, so a site using only the
+ * built-ins shows one group and no heading to choose between.
  *
- * 1. **Used in this course** — prototypes of this course or the site that the
- *    course's own CodeRunner questions already use. This is the group that
- *    stays small however large the library grows, which is why it comes first.
- * 2. **This course and the site** — the rest of them.
+ * 1. **This course** — prototypes belonging to the question's own course, in
+ *    tree order.
+ * 2. **Site** — the site library, in tree order.
  * 3. **Already borrowed from another course** — prototypes belonging to another
  *    course that this course's questions already use, each labelled with its
  *    course.
@@ -50,11 +53,11 @@ namespace local_coderunner_manager;
  * capability query off every page load of the question form.
  */
 class prototype_candidates {
-    /** @var string Prototypes of this course or the site that it already uses. */
-    const USED_HERE = 'usedhere';
+    /** @var string Prototypes belonging to the question's own course. */
+    const THIS_COURSE = 'thiscourse';
 
-    /** @var string Everything else of this course and the site. */
-    const COURSE_AND_SITE = 'courseandsite';
+    /** @var string Prototypes belonging to the site, which every course sees. */
+    const SITE = 'site';
 
     /** @var string Other courses' prototypes that this course already uses. */
     const BORROWED = 'borrowed';
@@ -113,10 +116,26 @@ class prototype_candidates {
             }
         }
 
-        $used = array_flip($usedhere);
+        // Partitioned by scope, not by use. An earlier version put the
+        // prototypes the course already uses first, on the grounds that the
+        // group would stay small however large the library grew. Measured on
+        // the development site it is the larger of the two on a mature course
+        // — a course uses nearly everything it owns — and it had two faults
+        // that scope does not. A prototype just created is by definition
+        // unused, so the menu filed an author's newest work among the
+        // built-ins at the moment they came to use it. And use is not
+        // hereditary: a parent can be used while its child is not, so no
+        // grouping by use can keep a tree whole, which defeats the
+        // indentation. Children are made in the same course as their parent,
+        // so scope keeps them together.
+        //
+        // The comparison is explicit: SITEID holds whatever the database
+        // returned for the site course's id, which is a *string* under MySQL,
+        // so `===` against an integer course id would always be false.
+        $issite = fn($prototype) => (int) $prototype->courseid === (int) SITEID;
         $groups = [
-            self::USED_HERE => array_filter($local, fn($p) => isset($used[$p->id])),
-            self::COURSE_AND_SITE => array_filter($local, fn($p) => !isset($used[$p->id])),
+            self::THIS_COURSE => array_filter($local, fn($p) => !$issite($p)),
+            self::SITE => array_filter($local, $issite),
             self::BORROWED => $borrowed,
         ];
 
@@ -182,6 +201,49 @@ class prototype_candidates {
             $names[$id] = format_string($course->shortname);
         }
         return $names;
+    }
+
+    /**
+     * Whether this user may open a prototype's own pages — its editor or its
+     * usage report.
+     *
+     * The same test those pages make, and made in the same way: each takes its
+     * context from the prototype's **own** course, so a site prototype is
+     * governed by the capability at system level. A teacher holding
+     * `qtype/coderunner:management` in one course does not hold it there, and
+     * both the course prototypes page and a usage report list prototypes of
+     * other scopes beside the ones they can open — so every such row offered a
+     * link that answered "you don't have permission". Asked here so that the
+     * pages and the links cannot disagree.
+     *
+     * Not the same question as {@see may_use_course()}, which is about
+     * building a question on a prototype: a site prototype is offered to every
+     * author, while its pages are not.
+     *
+     * @param prototype $prototype the prototype.
+     * @return bool true if its pages are reachable.
+     */
+    public static function may_manage(prototype $prototype): bool {
+        $context = $prototype->is_site_prototype()
+            ? \context_system::instance()
+            : \context_course::instance($prototype->courseid, IGNORE_MISSING);
+        return $context && has_capability(self::CAPABILITY, $context);
+    }
+
+    /**
+     * Whether this user may open a prototype in the editor.
+     *
+     * Stricter than {@see may_manage()}: a site prototype is every course's
+     * business, so `edit.php` reserves it to administrators whatever the
+     * capability says (design section 8). The usage report of a site prototype
+     * is readable by anyone the capability allows; the editor is not.
+     *
+     * @param prototype $prototype the prototype.
+     * @return bool true if the editor is reachable.
+     */
+    public static function may_edit(prototype $prototype): bool {
+        return self::may_manage($prototype)
+            && (!$prototype->is_site_prototype() || is_siteadmin());
     }
 
     /**
@@ -334,10 +396,11 @@ class prototype_candidates {
      * Prototypes as picker options, in tree order and indented by depth.
      *
      * Depth is counted within the group rather than over the whole library, and
-     * a prototype whose parent is not in the group is a root here. A group is
-     * usually a subset — *Used in this course* especially — and indenting an
-     * item three levels because of ancestors that are not on screen says
-     * nothing to the author reading it.
+     * a prototype whose parent is not in the group is a root here: indenting
+     * an item three levels because of ancestors that are not on screen says
+     * nothing to the author reading it. With the groups drawn by scope this
+     * arises where a course prototype descends from a site one, which is the
+     * common shape — a course's own type built on a built-in.
      *
      * @param prototype[] $prototypes the prototypes, keyed by id.
      * @param bool $withcourse true to label each with its course, which is what

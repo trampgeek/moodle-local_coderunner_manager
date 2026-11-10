@@ -22,6 +22,7 @@
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
+use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
 
 require_once(__DIR__ . '/../../config.php');
@@ -70,10 +71,18 @@ if ($descendants) {
             continue;
         }
         $own = $repo->usage_counts([$child->id])[$child->id] ?? ['questions' => 0];
-        echo html_writer::tag('li', html_writer::link(
-            new moodle_url('/local/coderunner_manager/usage.php', ['id' => $child->id]),
-            s($child->name)
-        ) . ' — ' . get_string('usagedirectquestions', 'local_coderunner_manager', $own['questions']));
+        // A child may belong to another course, or to the site, and this
+        // report takes its context from the prototype it is about — so a
+        // viewer who cannot open the child's report is given its name rather
+        // than a link to a refusal.
+        $label = prototype_candidates::may_manage($child)
+            ? html_writer::link(
+                new moodle_url('/local/coderunner_manager/usage.php', ['id' => $child->id]),
+                s($child->name)
+            )
+            : s($child->name);
+        echo html_writer::tag('li', $label . ' — '
+            . get_string('usagedirectquestions', 'local_coderunner_manager', $own['questions']));
     }
     echo html_writer::end_tag('ul');
 }

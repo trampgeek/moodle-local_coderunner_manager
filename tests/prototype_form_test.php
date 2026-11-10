@@ -25,6 +25,7 @@
 namespace local_coderunner_manager;
 
 use local_coderunner_manager\form\prototype_form;
+use qtype_coderunner\v6\form_section;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
 use qtype_coderunner\v6\settings_form;
@@ -79,6 +80,7 @@ final class prototype_form_test extends \advanced_testcase {
             'own' => $prototype && $prototype->currentversion
                 ? $prototype->currentversion->overrides
                 : new override_set([], ''),
+            'parentid' => $prototype?->parentid() ?? 0,
             'parents' => [0 => 'None'],
             'courseid' => SITEID,
             'readonly' => $readonly,
@@ -107,15 +109,29 @@ final class prototype_form_test extends \advanced_testcase {
     }
 
     /**
-     * Every field of every section the editor shows gets a control and an
-     * override checkbox.
+     * Every field of every section the editor shows gets a control, whether
+     * on a row of its own or inside the group of the field it belongs to.
+     *
+     * The template parameters' language and per-try switch are components of
+     * the parameters rather than settings of their own, so they sit in that
+     * field's group; everything else has a row.
      */
     public function test_every_shown_field_gets_a_control(): void {
         $mform = $this->quickform($this->build_form(null));
 
         $checked = 0;
         foreach (prototype_form::sections() as $section) {
-            foreach (settings_form::fields_of($section) as $name => $field) {
+            $fields = settings_form::fields_of($section);
+            $components = settings_form::components_of($fields);
+            foreach ($fields as $name => $field) {
+                if (isset($components[$name])) {
+                    $this->assertTrue(
+                        $this->is_group_member($mform, $name),
+                        "No control for $name beside the field it belongs to."
+                    );
+                    $checked++;
+                    continue;
+                }
                 $this->assertTrue(
                     $mform->elementExists($field->iscode ? $name : $name . '_group'),
                     "No control for $name."
@@ -125,6 +141,31 @@ final class prototype_form_test extends \advanced_testcase {
         }
 
         $this->assertGreaterThan(25, $checked, 'Far fewer fields were offered than the registry holds.');
+    }
+
+    /**
+     * Whether a component field is offered inside the group of the field that
+     * names it.
+     *
+     * @param \MoodleQuickForm $mform the built form.
+     * @param string $name the component's name.
+     * @return bool true if it is there.
+     */
+    private function is_group_member(\MoodleQuickForm $mform, string $name): bool {
+        foreach (\qtype_coderunner\v6\field_registry::all() as $principal) {
+            if (!in_array($name, $principal->perlayerwith, true)) {
+                continue;
+            }
+            if (!$mform->elementExists($principal->name . '_group')) {
+                return false;
+            }
+            foreach ($mform->getElement($principal->name . '_group')->getElements() as $element) {
+                if ($element->getName() === $name) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -196,5 +237,247 @@ final class prototype_form_test extends \advanced_testcase {
 
         $this->assertFalse($mform->elementExists('buttonar'), 'A frozen form still offered a save button.');
         $this->assertTrue($mform->elementExists('template'), 'A frozen form hid the settings instead of showing them.');
+        $this->assertFalse(
+            $mform->elementExists(prototype_form::RELOAD_BUTTON),
+            'A form nobody can change offered to rebuild itself.'
+        );
+    }
+
+    /**
+     * Changing the parent rebuilds the form, through a hidden no-submit button
+     * the menu presses.
+     *
+     * Everything the form says about a field but the author's own value comes
+     * from the parent chain: what the field inherits, which ancestor supplies
+     * it, and which test case fields the prototype offers. None of that can be
+     * worked out in the browser, so the server builds it again. Without this
+     * the form went on answering for the old parent until the prototype was
+     * saved and the page reloaded, which is how a child of python3_scratchpad
+     * came to show an empty template and *Parent: not set*.
+     */
+    public function test_a_change_of_parent_can_rebuild_the_form(): void {
+        $mform = $this->quickform($this->build_form(null));
+
+        $this->assertTrue(
+            $mform->elementExists(prototype_form::RELOAD_BUTTON),
+            'The parent menu had no way to rebuild the form.'
+        );
+        $this->assertTrue(
+            $mform->isNoSubmitButton(prototype_form::RELOAD_BUTTON),
+            'The reload button would save the prototype instead of rebuilding the form.'
+        );
+
+        // And it marks itself as skipping the form's client-side validation,
+        // which it can only do if it was registered before it was created:
+        // MoodleQuickForm_submit asks as it is built. Registered the other way
+        // round, pressing it runs every client rule on the form.
+        $button = $mform->getElement(prototype_form::RELOAD_BUTTON);
+        $this->assertSame(1, $button->getAttribute('data-no-submit'));
+        $this->assertStringContainsString(
+            'skipClientValidation',
+            (string) $button->getAttribute('onclick')
+        );
+    }
+
+    /**
+     * The submitted parent is what the form answers for, so the rebuilt form
+     * shows what the newly chosen parent supplies.
+     */
+    public function test_the_submitted_parent_wins(): void {
+        $parent = $this->repo->create('the_parent', SITEID, new override_set([], 'the_parent'));
+        $child = $this->repo->create('the_child', SITEID, new override_set([], 'the_child'), $parent->id);
+        $other = $this->repo->create('another', SITEID, new override_set([], 'another'));
+
+        $this->assertSame(
+            $other->id,
+            prototype_form::effective_parentid($child, $other->id, null),
+            'A change of parent was ignored in favour of the stored one.'
+        );
+        $this->assertNull(
+            prototype_form::effective_parentid($child, 0, null),
+            '*No parent* was read as "nothing submitted".'
+        );
+        $this->assertSame(
+            $parent->id,
+            prototype_form::effective_parentid($child, null, null),
+            'A form that was not submitted should answer for the stored parent.'
+        );
+    }
+
+    /**
+     * A prototype being created inherits from Site defaults unless the author
+     * says otherwise, which is where design section 6 puts the root of every
+     * chain — and the menu says so, rather than reading *No parent* beside a
+     * form showing Site defaults' values as inherited.
+     */
+    public function test_a_new_prototype_starts_from_site_defaults(): void {
+        $defaults = $this->repo->create(
+            'Site defaults',
+            SITEID,
+            new override_set([], 'Site defaults'),
+            null,
+            '',
+            '',
+            true,
+            '',
+            true
+        );
+
+        $this->assertSame(
+            $defaults->id,
+            prototype_form::effective_parentid(null, null, $defaults->id)
+        );
+
+        $form = new prototype_form(null, [
+            'prototype' => null,
+            'inherited' => (new prototype_chain([]))->resolve(),
+            'own' => new override_set([], ''),
+            'parentid' => $defaults->id,
+            'parents' => [0 => 'None', $defaults->id => 'Site defaults'],
+            'courseid' => SITEID,
+            'readonly' => false,
+        ]);
+
+        $this->assertSame(
+            [$defaults->id],
+            $this->quickform($form)->getElement(prototype_form::PARENT_FIELD)->getSelected(),
+            'The menu did not show the parent the form was built against.'
+        );
+    }
+
+    /**
+     * An author continuing a draft is shown the draft, not the published
+     * version it was drafted from.
+     *
+     * The overrides already came from the draft; the summary, the
+     * documentation and the parent did not, so three of a draft's fields read
+     * as the published version's, and saving again wrote the published values
+     * over the draft's own.
+     */
+    public function test_a_draft_is_what_the_form_continues_from(): void {
+        $published = $this->repo->create('a_parent', SITEID, new override_set([], 'a_parent'));
+        $drafted = $this->repo->create('another_parent', SITEID, new override_set([], 'another_parent'));
+        $prototype = $this->repo->create(
+            'in_progress',
+            SITEID,
+            new override_set([], 'in_progress'),
+            $published->id,
+            'The published summary'
+        );
+        $prototype = $this->repo->save_draft(
+            $prototype,
+            new override_set(['template' => 'DRAFTED'], 'in_progress'),
+            $drafted->id,
+            'The drafted summary'
+        );
+
+        $this->assertSame(
+            $drafted->id,
+            prototype_form::effective_parentid($prototype, null, null),
+            'The form inherited from the published parent while editing a draft.'
+        );
+
+        $editing = $prototype->draftversion;
+        $form = new prototype_form(null, [
+            'prototype' => $prototype,
+            'editing' => $editing,
+            'inherited' => $this->repo->chain_for($drafted->id)->resolve(),
+            'own' => $editing->overrides,
+            'parentid' => $drafted->id,
+            'parents' => [0 => 'None', $drafted->id => 'another_parent'],
+            'courseid' => SITEID,
+            'readonly' => false,
+        ]);
+        $mform = $this->quickform($form);
+
+        $this->assertSame(
+            'The drafted summary',
+            $mform->getElement('summary')->getValue(),
+            'The form showed the published summary while continuing a draft.'
+        );
+    }
+
+    /**
+     * A prototype is not saved with a merging document that cannot be read,
+     * since every question built on it merges that document.
+     *
+     * Only readability is checked. Template parameters written in another
+     * language are a program that produces JSON when it runs, and either
+     * document may hold Twig, which is JSON only once rendered — so neither
+     * is judged here.
+     */
+    public function test_an_unreadable_merging_document_is_refused(): void {
+        $base = [
+            'id' => 0,
+            'name' => 'a_prototype',
+            'courseid' => SITEID,
+            'templateparamslang' => 'None',
+        ];
+        $form = $this->build_form(null);
+
+        $broken = $form->validation($base + ['uiparameters' => '{"font_size": }'], []);
+        $this->assertArrayHasKey('uiparameters', $broken);
+        $this->assertSame(
+            get_string('invalidjson', 'local_coderunner_manager'),
+            $broken['uiparameters']
+        );
+
+        // Valid JSON, an empty document and a document holding Twig all pass.
+        foreach (['{"font_size": 14}', '', '   ', '{"n": {{ 1 + 1 }} }'] as $acceptable) {
+            $this->assertArrayNotHasKey(
+                'uiparameters',
+                $form->validation($base + ['uiparameters' => $acceptable], []),
+                "'$acceptable' should not be refused."
+            );
+        }
+
+        // Template parameters are only judged when they claim to be JSON
+        // already: in any other language they are a program.
+        $this->assertArrayHasKey(
+            'templateparams',
+            $form->validation($base + ['templateparams' => 'not json at all'], [])
+        );
+        $this->assertArrayNotHasKey(
+            'templateparams',
+            $form->validation(
+                ['templateparamslang' => 'python3'] + $base + ['templateparams' => 'print("hi")'],
+                []
+            )
+        );
+    }
+
+    /**
+     * A section's heading counts what this prototype changes, and the marks
+     * beside those fields are explained in the section that has them.
+     *
+     * The marks were already there; the count and the legend were in the
+     * question form alone, so the editor marked two test case fields and said
+     * nowhere what the marks meant.
+     */
+    public function test_a_section_header_counts_and_explains_its_changes(): void {
+        $parent = $this->repo->create(
+            'offers_everything',
+            SITEID,
+            new override_set(['showstdin' => 1, 'showtestextra' => 1], 'offers_everything')
+        );
+        $child = $this->repo->create(
+            'offers_less',
+            SITEID,
+            new override_set(['showstdin' => 0, 'showtestextra' => 0], 'offers_less'),
+            $parent->id
+        );
+
+        $mform = $this->quickform($this->build_form($child));
+        $header = settings_form::section_header(form_section::TESTCASEFIELDS);
+
+        $this->assertStringContainsString(
+            get_string('sectionchanged', 'qtype_coderunner', 2),
+            (string) $mform->getElement($header)->_text,
+            'The heading did not say the section held changes.'
+        );
+        $this->assertTrue(
+            $mform->elementExists($header . '_legend'),
+            'The section marked two fields and explained nothing.'
+        );
     }
 }

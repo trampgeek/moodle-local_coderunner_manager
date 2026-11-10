@@ -161,19 +161,28 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * The three default groups are a partition: a prototype the course uses is
-     * in the first group and not in the second, and nothing is listed twice.
+     * The groups are a partition by scope: the course's own prototypes in the
+     * first group, the site's in the second, and nothing listed twice.
+     *
+     * Use decides nothing here. A prototype just created is unused by
+     * definition, and filing it with the site's built-ins put an author's
+     * newest work where they would not look for it.
      */
-    public function test_the_default_groups_are_a_partition(): void {
-        $used = $this->make_prototype('python3', SITEID);
-        $unused = $this->make_prototype('java_class', SITEID);
+    public function test_the_default_groups_are_a_partition_by_scope(): void {
+        $sitewide = $this->make_prototype('python3', SITEID);
+        $mine = $this->make_prototype('cosc131_python3', (int) $this->course->id);
         $this->make_question_in_course((int) $this->course->id, 'python3');
 
         $groups = $this->candidates->groups_for_course((int) $this->course->id);
+        $thiscourse = $this->group($groups, prototype_candidates::THIS_COURSE);
+        $site = $this->group($groups, prototype_candidates::SITE);
 
-        $this->assertArrayHasKey($used->id, $this->group($groups, prototype_candidates::USED_HERE));
-        $this->assertArrayNotHasKey($used->id, $this->group($groups, prototype_candidates::COURSE_AND_SITE));
-        $this->assertArrayHasKey($unused->id, $this->group($groups, prototype_candidates::COURSE_AND_SITE));
+        $this->assertArrayHasKey($mine->id, $thiscourse);
+        $this->assertArrayNotHasKey($mine->id, $site);
+        // In use by a question of this course, and still in the site group,
+        // because that is where it belongs.
+        $this->assertArrayHasKey($sitewide->id, $site);
+        $this->assertArrayNotHasKey($sitewide->id, $thiscourse);
 
         $seen = [];
         foreach ($groups as $group) {
@@ -182,6 +191,46 @@ final class prototype_candidates_test extends \advanced_testcase {
                 $seen[$id] = true;
             }
         }
+    }
+
+    /**
+     * A course with no prototypes of its own is offered no empty group, which
+     * is the common case on a site that uses only the built-ins.
+     */
+    public function test_a_course_with_no_prototypes_of_its_own_gets_no_group(): void {
+        $this->make_prototype('python3', SITEID);
+
+        $groups = $this->candidates->groups_for_course((int) $this->course->id);
+
+        $this->assertSame(
+            [prototype_candidates::SITE],
+            array_column($groups, 'key'),
+            'An empty group should not be offered at all.'
+        );
+    }
+
+    /**
+     * A child made in the course of its parent stays with it, whether or not
+     * anything uses it yet.
+     *
+     * This is what grouping by scope buys and grouping by use cannot: use is
+     * not hereditary, so a used parent and its unused child landed in
+     * different groups, and the child appeared as a root of the group it fell
+     * into — which is how two new children of python3_scratchpad came to look
+     * like they had not been created.
+     */
+    public function test_a_new_child_stays_with_its_parent(): void {
+        $parent = $this->make_prototype('scratchpad', (int) $this->course->id);
+        $child = $this->make_prototype('scratchpad_files', (int) $this->course->id, $parent->id);
+        $this->make_question_in_course((int) $this->course->id, 'scratchpad');
+
+        $options = $this->group(
+            $this->candidates->groups_for_course((int) $this->course->id),
+            prototype_candidates::THIS_COURSE
+        );
+
+        $this->assertSame([$parent->id, $child->id], array_keys($options));
+        $this->assertSame(1, $options[$child->id]['depth'], 'The child should sit under its parent.');
     }
 
     /**
@@ -232,41 +281,83 @@ final class prototype_candidates_test extends \advanced_testcase {
         $child = $this->make_prototype('python3_scratchpad', SITEID, $parent->id);
         $grandchild = $this->make_prototype('cosc131_scratchpad', (int) $this->course->id, $child->id);
 
-        $options = $this->group(
+        $site = $this->group(
             $this->candidates->groups_for_course((int) $this->course->id),
-            prototype_candidates::COURSE_AND_SITE
+            prototype_candidates::SITE
+        );
+        $own = $this->group(
+            $this->candidates->groups_for_course((int) $this->course->id),
+            prototype_candidates::THIS_COURSE
         );
 
         $this->assertSame(
-            [$parent->id, $child->id, $grandchild->id],
-            array_keys($options),
+            [$parent->id, $child->id],
+            array_keys($site),
             'The group should be in tree order, parent before child.'
         );
-        $this->assertSame(0, $options[$parent->id]['depth']);
-        $this->assertSame(1, $options[$child->id]['depth']);
-        $this->assertSame(2, $options[$grandchild->id]['depth']);
+        $this->assertSame(0, $site[$parent->id]['depth']);
+        $this->assertSame(1, $site[$child->id]['depth']);
+        // The grandchild belongs to the course, so it is in the course's group
+        // — and a root there, since its parent is in the site's.
+        $this->assertSame([$grandchild->id], array_keys($own));
+        $this->assertSame(0, $own[$grandchild->id]['depth']);
     }
 
     /**
      * Depth is counted within the group, so a prototype whose parent is not in
      * the group is a root there.
      *
-     * A group is usually a subset — *Used in this course* especially — and
-     * indenting an item two levels because of ancestors that are not on screen
-     * tells the author nothing.
+     * Indenting an item two levels because of ancestors that are not on screen
+     * tells the author nothing. With the groups drawn by scope this happens
+     * only where a course prototype descends from a site one, which is the
+     * common shape: a course's own type built on a built-in.
      */
     public function test_depth_is_counted_within_the_group(): void {
         $parent = $this->make_prototype('python3', SITEID);
-        $child = $this->make_prototype('python3_scratchpad', SITEID, $parent->id);
-        $this->make_question_in_course((int) $this->course->id, 'python3_scratchpad');
+        $child = $this->make_prototype('cosc131_python3', (int) $this->course->id, $parent->id);
 
         $options = $this->group(
             $this->candidates->groups_for_course((int) $this->course->id),
-            prototype_candidates::USED_HERE
+            prototype_candidates::THIS_COURSE
         );
 
         $this->assertSame([$child->id], array_keys($options));
         $this->assertSame(0, $options[$child->id]['depth']);
+    }
+
+    /**
+     * A prototype's own pages are reachable only where the capability reaches
+     * them, which for a site prototype means at system level.
+     *
+     * The page and the pages it links to have to agree about this. Both
+     * `edit.php` and `usage.php` take their context from the prototype's own
+     * course, so a teacher holding the capability in one course does not hold
+     * it over a site prototype — and the course prototypes page lists the site
+     * prototypes beside the course's own. Every built-in row linked to a
+     * refusal until the list asked this question first.
+     */
+    public function test_only_reachable_pages_are_offered(): void {
+        $sitewide = $this->make_prototype('python3', SITEID);
+        $mine = $this->make_prototype('cosc131_python3', (int) $this->course->id);
+
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $this->course->id, 'editingteacher');
+        $this->setUser($teacher);
+
+        // Their own course's prototype: both pages.
+        $this->assertTrue(prototype_candidates::may_manage($mine));
+        $this->assertTrue(prototype_candidates::may_edit($mine));
+
+        // A site prototype: neither, because the capability is theirs at
+        // course level only.
+        $this->assertFalse(prototype_candidates::may_manage($sitewide));
+        $this->assertFalse(prototype_candidates::may_edit($sitewide));
+
+        // An administrator gets both, and the editor is the stricter test:
+        // only an administrator passes it for a site prototype.
+        $this->setAdminUser();
+        $this->assertTrue(prototype_candidates::may_manage($sitewide));
+        $this->assertTrue(prototype_candidates::may_edit($sitewide));
     }
 
     /**

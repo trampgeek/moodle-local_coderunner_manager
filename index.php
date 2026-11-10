@@ -26,6 +26,7 @@
  */
 
 use local_coderunner_manager\prototype;
+use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
 
 require_once(__DIR__ . '/../../config.php');
@@ -85,29 +86,22 @@ foreach ($prototypes as $prototype) {
 }
 
 /**
- * The links offered against one prototype.
- *
- * A built-in is rewritten by every CodeRunner release, so editing one would
- * lose the change; Site defaults is the exception, since it exists to be
- * edited. Either way a child can be made, which is the supported way to build
- * on a built-in.
+ * The name cell for one prototype: a link to the editor where this user can
+ * open it, and the name alone where they cannot.
  *
  * @param prototype $prototype the prototype.
- * @return string[] the rendered links.
+ * @param int $depth how deep in the tree it sits.
+ * @return string the rendered cell.
  */
 function prototype_name_cell(prototype $prototype, int $depth): string {
     $indent = str_repeat('&nbsp;', $depth * 4);
     $name = s($prototype->name);
 
-    // A built-in is rewritten by every release, so it is not a link: editing it
-    // would lose the change.
-    if ($prototype->builtin && !$prototype->issitedefaults) {
-        // Readable by anyone choosing it, and editable by an administrator
-        // from the site page, where the first save splits it (decision 23).
-        return $indent . html_writer::link(
-            new moodle_url('/local/coderunner_manager/edit.php', ['id' => $prototype->id]),
-            $name
-        );
+    if (!prototype_candidates::may_edit($prototype)) {
+        // Named, but not offered: a built-in and every other site prototype is
+        // an administrator's to change, and the row still has to say what the
+        // prototype is and what uses it.
+        return $indent . $name;
     }
 
     // Site defaults sits under every question on the server, so it is editable
@@ -165,14 +159,20 @@ function print_prototype_row(
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
-    $usagelink = $counts['questions'] || $counts['children']
-        ? html_writer::link(
+    $used = $counts['questions'] || $counts['children'];
+    $usagecell = '';
+    if ($used && prototype_candidates::may_manage($prototype)) {
+        $usagecell = html_writer::link(
             new moodle_url('/local/coderunner_manager/usage.php', ['id' => $prototype->id]),
             $counts['questions'] ?: '0',
             ['title' => get_string('usagereport', 'local_coderunner_manager')]
-        )
-        : '';
-    echo html_writer::tag('td', $usagelink);
+        );
+    } else if ($used) {
+        // The count without the report, which this user may not open: the
+        // number is the useful half and it is already on the page.
+        $usagecell = $counts['questions'] ?: '0';
+    }
+    echo html_writer::tag('td', $usagecell);
     echo html_writer::tag('td', $counts['children'] ?: '');
     echo html_writer::tag('td', s($version ? $version->summary : ''), ['class' => 'w-50']);
     echo html_writer::end_tag('tr');

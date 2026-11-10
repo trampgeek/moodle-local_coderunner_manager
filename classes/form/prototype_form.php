@@ -49,6 +49,21 @@ require_once($CFG->libdir . '/formslib.php');
  */
 class prototype_form extends \moodleform {
     /**
+     * The menu naming the prototype this one inherits from.
+     */
+    const PARENT_FIELD = 'parentid';
+
+    /**
+     * The hidden no-submit button that rebuilds the form on a change of parent.
+     *
+     * Changing the parent changes every value the prototype inherits and every
+     * note saying where one comes from, and none of that can be worked out in
+     * the browser. The question form rebuilds itself the same way when its
+     * prototype changes.
+     */
+    const RELOAD_BUTTON = 'parentreload';
+
+    /**
      * Build the form.
      */
     protected function definition() {
@@ -60,6 +75,13 @@ class prototype_form extends \moodleform {
         $inherited = $this->_customdata['inherited'];
         // What this prototype currently overrides of that.
         $own = $this->_customdata['own'];
+        // The version the author is continuing from: the draft when there is
+        // one, which is where $own came from too. Reading the summary and the
+        // documentation off the published version instead showed an author
+        // continuing a draft the values it was drafted from, and saving again
+        // wrote those back over the draft's own.
+        $editing = $this->_customdata['editing']
+            ?? ($prototype?->draftversion ?? $prototype?->currentversion);
         // Candidate parents, id => label, with cycles already excluded.
         $parents = $this->_customdata['parents'];
         // True when the prototype may be read but not changed.
@@ -82,8 +104,22 @@ class prototype_form extends \moodleform {
         $mform->addRule('name', null, 'required', null, 'client');
         $mform->addHelpButton('name', 'prototypename', 'local_coderunner_manager');
 
-        $mform->addElement('select', 'parentid', get_string('parentprototype', 'local_coderunner_manager'), $parents);
-        $mform->addHelpButton('parentid', 'parentprototype', 'local_coderunner_manager');
+        $mform->addElement(
+            'select',
+            self::PARENT_FIELD,
+            get_string('parentprototype', 'local_coderunner_manager'),
+            $parents
+        );
+        $mform->addHelpButton(self::PARENT_FIELD, 'parentprototype', 'local_coderunner_manager');
+
+        // The menu's reload button is registered here: unconditionally, so that
+        // nothing about the request can leave a press unrecognised, and before
+        // the button is created further down, so that it marks itself as
+        // skipping the form's client-side validation. The question form's
+        // picker had both of those the wrong way round, and the second branch
+        // of its *From another course* step dropped the registration
+        // altogether: pressing the button saved the question.
+        $mform->registerNoSubmitButton(self::RELOAD_BUTTON);
 
         $mform->addElement('text', 'summary', get_string('summary', 'local_coderunner_manager'), ['size' => 70]);
         $mform->setType('summary', PARAM_TEXT);
@@ -123,8 +159,15 @@ class prototype_form extends \moodleform {
             if (!settings_form::fields_of($section)) {
                 continue;
             }
-            $header = 'section_' . $section->value;
-            $mform->addElement('header', $header, $section->label());
+            $header = settings_form::section_header($section);
+            // The heading counts the fields this prototype changes, so a
+            // closed section cannot hide one, and the component adds the
+            // legend explaining the marks beside those fields.
+            $mform->addElement(
+                'header',
+                $header,
+                settings_form::section_label($section, $own, $inherited)
+            );
             settings_form::add_section($mform, $section, $inherited, $own, $language);
         }
 
@@ -169,15 +212,38 @@ class prototype_form extends \moodleform {
             }
             $mform->addGroup($buttons, 'buttonar', '', ' ', false);
             $mform->closeHeaderBefore('buttonar');
+
+            // Changing the parent rebuilds the form, so that the values the
+            // prototype inherits, and the notes saying which ancestor supplies
+            // each one, are the new parent's. Without this the form answered
+            // for the old parent until the prototype was saved and reloaded.
+            //
+            // Added after the save buttons, although the menu it belongs to is
+            // at the top of the form: a browser's implicit submission presses
+            // the *first* submit button, so a hidden one any earlier would
+            // rebuild the form instead of saving it whenever an author pressed
+            // Enter in a text field. The script finds it by id, so where it
+            // sits makes no difference to it.
+            $mform->addElement(
+                'submit',
+                self::RELOAD_BUTTON,
+                get_string('parentreload', 'local_coderunner_manager'),
+                ['class' => 'visually-hidden']
+            );
         }
+
+        // The parent the page worked out, which is the submitted one on a
+        // reload and the stored one otherwise. Set for a new prototype as well
+        // as an existing one: a form that showed Site defaults' values as
+        // inherited while the menu read "No parent" saved the second.
+        $mform->setDefault(self::PARENT_FIELD, $this->_customdata['parentid'] ?? 0);
 
         if ($prototype) {
             $mform->setDefault('name', $prototype->name);
-            $mform->setDefault('parentid', $prototype->parentid() ?? 0);
-            $mform->setDefault('summary', $prototype->currentversion?->summary ?? '');
+            $mform->setDefault('summary', $editing?->summary ?? '');
             $mform->setDefault('documentation', [
-                'text' => $prototype->currentversion?->documentation ?? '',
-                'format' => $prototype->currentversion?->documentationformat ?? FORMAT_HTML,
+                'text' => $editing?->documentation ?? '',
+                'format' => $editing?->documentationformat ?? FORMAT_HTML,
             ]);
         }
     }
@@ -204,7 +270,60 @@ class prototype_form extends \moodleform {
     }
 
     /**
-     * Check the name is free in this scope.
+     * The parent whose chain the form shows as inherited.
+     *
+     * The submission wins when there is one, so that the no-submit reload
+     * after a change of parent answers for the new parent rather than for what
+     * is stored. A prototype being created inherits from Site defaults unless
+     * the author says otherwise, which is where design section 6 puts the root
+     * of every chain.
+     *
+     * @param prototype|null $prototype the prototype being edited, or null
+     *      when creating one.
+     * @param int|null $submitted the parent the form submitted, or null when
+     *      the form has not been submitted. Zero means *No parent*.
+     * @param int|null $sitedefaultsid the Site defaults prototype's id.
+     * @return int|null the parent's id, or null for a root.
+     */
+    public static function effective_parentid(
+        ?prototype $prototype,
+        ?int $submitted,
+        ?int $sitedefaultsid
+    ): ?int {
+        if ($submitted !== null) {
+            return $submitted ?: null;
+        }
+        if ($prototype) {
+            // The draft's parent when there is a draft, since that is the
+            // version being continued.
+            $editing = $prototype->draftversion ?? $prototype->currentversion;
+            return $editing?->parentid;
+        }
+        return $sitedefaultsid;
+    }
+
+    /**
+     * Ask the page for the script that rebuilds the form on a change of parent.
+     *
+     * The script is the question type's, which owns the form component this
+     * editor is built from; see decision 22 for why that coupling exists.
+     *
+     * Called by the page rather than from the form definition, so that building
+     * a form has no side effects on $PAGE and can be done in a test.
+     */
+    public static function require_reload_on_change(): void {
+        global $PAGE;
+
+        $PAGE->requires->js_call_amd(
+            'qtype_coderunner/prototypereload',
+            'init',
+            ['id_' . self::PARENT_FIELD, 'id_' . self::RELOAD_BUTTON]
+        );
+    }
+
+    /**
+     * Check the name is free in this scope, and that the documents every
+     * question beneath this prototype will merge are readable.
      *
      * @param array $data submitted data.
      * @param array $files submitted files.
@@ -219,6 +338,63 @@ class prototype_form extends \moodleform {
             $errors['name'] = get_string($clash, 'local_coderunner_manager', $data['name']);
         }
 
+        return $errors + $this->json_errors($data);
+    }
+
+    /**
+     * Unreadable merging documents, which a prototype must not be saved with.
+     *
+     * The template parameters and the UI parameters of every layer are merged
+     * into every question built on it, so a prototype holding a document that
+     * cannot be read breaks all of them at once — and the question form, which
+     * has validated both since CodeRunner 5, would report the breakage against
+     * the question rather than against the prototype that caused it. This is a
+     * readability check and nothing more: there are unlimited ways to write a
+     * prototype that breaks its children, and only this one is cheap to catch.
+     *
+     * Two cases are not checked, because in them the document is not JSON yet.
+     * Template parameters written in a language other than *None* are a program
+     * that produces JSON when it is run — a Python one, commonly. And either
+     * document may hold Twig, which is JSON only once it has been rendered,
+     * which needs a question, a seed and a student.
+     *
+     * @param array $data submitted data.
+     * @return array errors, field name => message.
+     */
+    protected function json_errors(array $data): array {
+        $errors = [];
+
+        $fields = settings_form::fields_of(form_section::PARAMETERS)
+            + settings_form::fields_of(form_section::UI);
+        foreach ($fields as $name => $field) {
+            if (!$field->merges_with_inherited() || !isset($data[$name])) {
+                continue;
+            }
+
+            $document = trim((string) $data[$name]);
+            if ($document === '' || self::holds_twig($document)) {
+                continue;
+            }
+            if ($name === 'templateparams' && ($data['templateparamslang'] ?? 'None') !== 'None') {
+                continue;
+            }
+
+            if (!is_array(json_decode($document, true))) {
+                $errors[$name] = get_string('invalidjson', 'local_coderunner_manager');
+            }
+        }
+
         return $errors;
+    }
+
+    /**
+     * Whether a document holds Twig, and so cannot be read as JSON until it
+     * has been rendered.
+     *
+     * @param string $document the document.
+     * @return bool true if it holds Twig.
+     */
+    protected static function holds_twig(string $document): bool {
+        return str_contains($document, '{{') || str_contains($document, '{%');
     }
 }
