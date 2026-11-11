@@ -123,6 +123,71 @@ final class prototype_installer_test extends \advanced_testcase {
     }
 
     /**
+     * A user prototype question is converted once, and a later run leaves the
+     * prototype alone however much the two have diverged.
+     *
+     * The snapshot has to stay re-runnable — for a conversion that stopped
+     * part way, and for a course restored from a pre-6.0 backup — so it runs
+     * on every upgrade. Written as an upsert, each run re-read every prototype
+     * question and wrote a new version of any prototype that differed, which
+     * silently reverted an author's work in the prototype editor to whatever
+     * the dead prototype question still said. It is also what the legacy
+     * prototype-question banner promises does not happen.
+     */
+    public function test_an_edited_prototype_is_not_reverted_by_a_later_run(): void {
+        $installer = new prototype_installer();
+        $repo = new prototype_repository();
+
+        $this->make_prototype_question('reverted_me');
+        $first = $installer->snapshot_user_prototypes();
+        $this->assertSame(1, $first['created']);
+
+        $prototype = $repo->find_by_name_for_course('reverted_me', $this->courseid);
+        $this->assertNotNull($prototype);
+        $repo->save_new_version(
+            $prototype,
+            $prototype->currentversion->overrides->with('template', 'EDITED IN THE MANAGER'),
+            $prototype->parentid(),
+            '',
+            $prototype->currentversion->documentation,
+            'An author at work.'
+        );
+
+        $second = $installer->snapshot_user_prototypes();
+
+        $this->assertSame(0, $second['created']);
+        $this->assertSame(0, $second['updated'], 'The prototype question was re-imported over the edit.');
+        $this->assertSame(1, $second['unchanged']);
+
+        $after = $repo->get_or_fail($prototype->id);
+        $this->assertSame(
+            'EDITED IN THE MANAGER',
+            $after->currentversion->overrides->get('template'),
+            'The author\'s edit was reverted.'
+        );
+        $this->assertSame(2, $after->currentversion->version, 'A version was added on top of the edit.');
+    }
+
+    /**
+     * A prototype question that has not been converted yet is still converted
+     * by a later run, which is what keeps the snapshot a recovery path.
+     */
+    public function test_a_new_prototype_question_is_still_converted_later(): void {
+        $installer = new prototype_installer();
+
+        $this->make_prototype_question('first_one');
+        $this->assertSame(1, $installer->snapshot_user_prototypes()['created']);
+
+        // What a restored course brings: a prototype question the manager has
+        // not seen.
+        $this->make_prototype_question('arrived_later');
+        $counts = $installer->snapshot_user_prototypes();
+
+        $this->assertSame(1, $counts['created'], 'The new prototype question was not converted.');
+        $this->assertSame(1, $counts['unchanged'], 'The first one should have been left alone.');
+    }
+
+    /**
      * The Site defaults prototype is created once and sits at the root of every
      * chain, holding the values CodeRunner 5 kept in code and admin settings.
      */
@@ -421,5 +486,54 @@ final class prototype_installer_test extends \advanced_testcase {
         sort($derived);
         sort($declared);
         $this->assertSame($derived, $declared);
+    }
+
+    /** @var int|null the course whose bank holds the fixture questions. */
+    private ?int $courseid = null;
+
+    /** @var int|null the context of that bank. */
+    private ?int $bankcontextid = null;
+
+    /**
+     * Create a CodeRunner 5 prototype question in a question bank of a course.
+     *
+     * Built through the question generator rather than `test_question_maker`,
+     * which resolves a fixture's type against the built-in prototype
+     * *questions* and so needs the question type's own test base class.
+     *
+     * @param string $coderunnertype the prototype name it defines.
+     * @return object the saved question.
+     */
+    private function make_prototype_question(string $coderunnertype): object {
+        if ($this->bankcontextid === null) {
+            // Saving a new prototype question makes CodeRunner 5 look for one
+            // of the same name, and its search starts at the site's own
+            // question bank, which prototype_contexts() refuses to run without.
+            \core_question\local\bank\question_bank_helper::get_default_open_instance_system_type(
+                get_site(),
+                true
+            );
+
+            // Not cached across tests: resetAfterTest() rolls the database
+            // back, so a context id held in a static would be stale.
+            $this->courseid = (int) $this->getDataGenerator()->create_course()->id;
+            $bank = $this->getDataGenerator()->create_module('qbank', ['course' => $this->courseid]);
+            $this->bankcontextid = (int) \context_module::instance($bank->cmid)->id;
+        }
+
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $category = $generator->create_question_category(['contextid' => $this->bankcontextid]);
+
+        return $generator->create_question('coderunner', 'sqr', [
+            'category' => $category->id,
+            'name' => 'PROTOTYPE_' . $coderunnertype,
+            'coderunnertype' => $coderunnertype,
+            'prototypetype' => 2,
+            // CodeRunner 5's form carried the new type's name in its own
+            // field, and clean_question_form() still reads it when saving a
+            // customised prototype question.
+            'typename' => $coderunnertype,
+            'template' => '{{ STUDENT_ANSWER }}',
+        ]);
     }
 }

@@ -307,6 +307,23 @@ class prototype_installer {
      * @return array the counts for this run.
      */
     public function snapshot_user_prototypes(): array {
+        // Create-only, which is the difference between this and
+        // install_builtins(). A built-in is maintained by CodeRunner, so a new
+        // release updates it; a user prototype question is converted once and
+        // the prototype is the authority afterwards.
+        //
+        // Updating was the original behaviour and it was wrong in a way that
+        // only showed on a site where both existed. This method has to stay
+        // re-runnable, for a conversion that stopped part way and for a course
+        // restored from a pre-6.0 backup, so it runs on every upgrade — and on
+        // each run it re-read every prototype question and wrote a new version
+        // of any prototype that differed. An author who edited a prototype in
+        // the manager therefore had their edit reverted to whatever the dead
+        // prototype question still said, with the commit message "Updated by
+        // the CodeRunner prototype installer" against it. Measured on the
+        // development site, 14 prototypes were one task run away from exactly
+        // that. It is also what lets the legacy prototype-question banner say
+        // truthfully that edits there affect nothing else.
         $this->reset_counts();
 
         $byscope = [];
@@ -352,7 +369,9 @@ class prototype_installer {
                 $root->id,
                 $this->question_support_files($record),
                 '',
-                legacy_converter::documentation_format($columns)
+                legacy_converter::documentation_format($columns),
+                '',
+                true
             );
         }
         return $this->counts;
@@ -416,6 +435,7 @@ class prototype_installer {
      *      name. Written only when the prototype has none: an author's own
      *      summary is theirs, and a later run of the installer must not
      *      overwrite it.
+     * @param bool $createonly leave an existing prototype entirely alone.
      */
     protected function upsert(
         string $name,
@@ -427,7 +447,8 @@ class prototype_installer {
         array $files = [],
         string $uuid = '',
         int $documentationformat = FORMAT_HTML,
-        string $summary = ''
+        string $summary = '',
+        bool $createonly = false
     ): void {
         $overrides = $this->prune_redundant($overrides, $parentid);
         // A built-in is looked up by its uuid, which survives the rename that
@@ -470,6 +491,15 @@ class prototype_installer {
                 $documentationformat
             );
             $this->counts['created']++;
+            return;
+        }
+
+        if ($createonly) {
+            // The prototype exists, so this prototype question has already
+            // been converted and the prototype is the authority from here on.
+            // Counted as unchanged, which is what an operator reading the
+            // task's output needs to know: it was left alone.
+            $this->counts['unchanged']++;
             return;
         }
 
