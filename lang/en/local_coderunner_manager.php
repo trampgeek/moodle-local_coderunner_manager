@@ -140,3 +140,4 @@ $string['draftwaiting'] = 'This prototype has an unpublished draft. Publishing i
 $string['publishdraft'] = 'Publish the draft';
 $string['discarddraft'] = 'Discard it';
 $string['scopesitebuiltin'] = 'Site (built in)';
+$string['redundantfiles_commit'] = 'Dropped support files identical to the inherited ones.';
