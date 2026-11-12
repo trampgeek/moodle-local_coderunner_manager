@@ -78,18 +78,50 @@ class redundant_files {
      *      'contenthash' => the prototype's own copy's hash].
      */
     public function analyse(int $prototypeid): array {
-        $chain = $this->repo->chain_prototypes($prototypeid);
-
-        // chain_prototypes() returns root first, so the prototype itself is
-        // last and everything before it is an ancestor.
-        $self = array_pop($chain);
-        if ($self === null || $self->currentversion === null) {
+        $prototype = $this->repo->get_or_fail($prototypeid);
+        if ($prototype->currentversion === null) {
             return [];
         }
+        return $this->classify(
+            $this->repo->version_files($prototype, $prototype->currentversion->id),
+            $this->inherited_files($prototypeid)
+        );
+    }
 
-        // The file each ancestor would supply, nearest ancestor winning. The
-        // ancestors are still in root-first order, so a later assignment is a
-        // nearer layer and must overwrite an earlier one.
+    /**
+     * The support file each ancestor of a prototype would supply, by filename.
+     *
+     * Nearest ancestor winning, which is what the merge does and therefore
+     * what a redundancy has to be judged against. The prototype's own files
+     * are not included: this is what it would get if it had none.
+     *
+     * @param int $prototypeid the prototype whose ancestors to read.
+     * @return array filename => ['file' => \stored_file, 'from' => name].
+     */
+    public function inherited_files(int $prototypeid): array {
+        $prototype = $this->repo->get_or_fail($prototypeid);
+        return $this->files_from_chain($prototype->currentversion?->parentid);
+    }
+
+    /**
+     * The support files a chain supplies, by filename, nearest layer winning.
+     *
+     * Keyed on the **parent** rather than on the prototype, because that is
+     * what an authoring form has: an author who picks a different parent from
+     * the menu must see what the new parent supplies, not what the stored one
+     * did.
+     *
+     * @param int|null $parentid the parent prototype, or null for no chain.
+     * @return array filename => ['file' => \stored_file, 'from' => name].
+     */
+    public function files_from_chain(?int $parentid): array {
+        if ($parentid === null) {
+            return [];
+        }
+        $chain = $this->repo->chain_prototypes($parentid);
+
+        // Root first, so a later assignment is a nearer layer and must
+        // overwrite an earlier one.
         $inherited = [];
         foreach ($chain as $ancestor) {
             if ($ancestor->currentversion === null) {
@@ -99,9 +131,24 @@ class redundant_files {
                 $inherited[$name] = ['file' => $file, 'from' => $ancestor->name];
             }
         }
+        return $inherited;
+    }
 
+    /**
+     * Classify a set of files against what would be inherited.
+     *
+     * Separate from analyse() because the authoring form must classify the
+     * **draft area** rather than the stored version: the file manager works
+     * through a draft, so what an author is looking at is not yet any
+     * version's file set, and marks read from the stored version would be
+     * stale the moment they added or removed a file.
+     *
+     * @param \stored_file[] $ownfiles the files to classify, keyed by filename.
+     * @param array $inherited the result of inherited_files().
+     * @return array filename => ['status', 'inheritedfrom', 'contenthash'].
+     */
+    public function classify(array $ownfiles, array $inherited): array {
         $result = [];
-        $ownfiles = $this->repo->version_files($self, $self->currentversion->id);
         foreach ($ownfiles as $name => $file) {
             $candidate = $inherited[$name] ?? null;
             if ($candidate === null) {

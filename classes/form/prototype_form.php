@@ -25,6 +25,7 @@
 namespace local_coderunner_manager\form;
 
 use local_coderunner_manager\prototype;
+use local_coderunner_manager\redundant_files;
 use qtype_coderunner\v6\form_section;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\question_settings;
@@ -140,19 +141,17 @@ class prototype_form extends \moodleform {
         $mform->setType('documentation', PARAM_RAW);
         $mform->addHelpButton('documentation', 'documentation', 'local_coderunner_manager');
 
-        // Support files. These are a set of files rather than a value, so the
-        // registry-driven component leaves them out and they get a file
-        // manager of their own. A version carries a complete set: whatever is
-        // here when the form is saved is what the new version holds, and a
-        // file removed here is removed from the version.
-        $mform->addElement(
-            'filemanager',
-            'supportfiles',
-            get_string('supportfiles', 'local_coderunner_manager'),
-            null,
-            ['subdirs' => 0, 'accepted_types' => '*']
-        );
-        $mform->addHelpButton('supportfiles', 'supportfiles', 'local_coderunner_manager');
+        // Support files get a section of their own rather than sitting under
+        // Identity. They are not identity: name, parent, summary and
+        // documentation are all *about* the prototype and none of them
+        // inherits, while support files merge along the chain by filename,
+        // which is the behaviour of the collected settings. Filed with the
+        // former, the form showed only the prototype's own files with nothing
+        // to say that its ancestors supply more -- so a prototype owning three
+        // files and inheriting nineteen read as a prototype with three -- and
+        // the section carried no change count, so there was nothing to see in
+        // "what changed" either.
+        $this->add_support_files_section($mform);
 
         // The settings, section by section, straight from the registry.
         foreach (self::sections() as $section) {
@@ -246,6 +245,144 @@ class prototype_form extends \moodleform {
                 'format' => $editing?->documentationformat ?? FORMAT_HTML,
             ]);
         }
+    }
+
+    /**
+     * The support files section: the prototype's own files, what it inherits,
+     * and which of its own it need not have.
+     *
+     * **The marks are read from the draft area, not from the stored version.**
+     * The file manager works through a draft, so what the author is looking at
+     * is not yet any version's file set; marks taken from the stored version
+     * would be stale the moment a file was added or removed, and would be
+     * wrong on a prototype whose parent has just been changed in the menu.
+     *
+     * **The inherited files are listed but not repeated in the manager.** The
+     * manager holds what this prototype supplies, and seeding it with the
+     * ancestors' files would make the author own a copy of each the moment they
+     * saved — which is exactly the state decision 28 exists to undo. So they
+     * are named beside it instead.
+     *
+     * @param \MoodleQuickForm $mform the form being built.
+     */
+    protected function add_support_files_section(\MoodleQuickForm $mform): void {
+        $analyser = new redundant_files();
+        $own = $this->draft_files();
+        $inherited = $analyser->files_from_chain($this->form_parentid());
+        $rows = $analyser->classify($own, $inherited);
+
+        // Counted the way every other section counts: what this layer does
+        // that the one above does not. A redundant copy changes nothing, so it
+        // is not a change, which is the rule settings_form::changed_count()
+        // settled for overrides.
+        $changed = 0;
+        foreach ($rows as $row) {
+            if ($row['status'] !== redundant_files::REDUNDANT) {
+                $changed++;
+            }
+        }
+        $label = get_string('supportfilesheading', 'local_coderunner_manager');
+        if ($changed > 0) {
+            $label .= ' · ' . get_string('sectionchanged', 'qtype_coderunner', $changed);
+        }
+
+        $mform->addElement('header', 'supportfilesheader', $label);
+
+        $mform->addElement(
+            'filemanager',
+            'supportfiles',
+            get_string('supportfilesownheading', 'local_coderunner_manager'),
+            null,
+            ['subdirs' => 0, 'accepted_types' => '*']
+        );
+        $mform->addHelpButton('supportfiles', 'supportfiles', 'local_coderunner_manager');
+
+        // What the chain supplies that this prototype does not have to.
+        if ($inherited) {
+            $names = [];
+            foreach ($inherited as $name => $layer) {
+                if (!isset($rows[$name])) {
+                    $names[] = get_string('supportfilesinheritedfrom', 'local_coderunner_manager', [
+                        'name' => $name,
+                        'from' => $layer['from'],
+                    ]);
+                }
+            }
+            $text = $names
+                ? get_string('supportfilesinherited', 'local_coderunner_manager', implode(', ', $names))
+                : get_string('supportfilesinheritednone', 'local_coderunner_manager');
+        } else {
+            $text = get_string('supportfilesinheritednone', 'local_coderunner_manager');
+        }
+        $mform->addElement('static', 'supportfilesinheritednote', '', s($text));
+
+        // One line per own file, saying what it does relative to the chain.
+        $notes = [];
+        foreach ($rows as $name => $row) {
+            $reason = match ($row['status']) {
+                redundant_files::REDUNDANT => get_string(
+                    'supportfilesmarkredundant',
+                    'local_coderunner_manager',
+                    $row['inheritedfrom']
+                ),
+                redundant_files::SHADOWING => get_string(
+                    'supportfilesmarkshadowing',
+                    'local_coderunner_manager',
+                    $row['inheritedfrom']
+                ),
+                default => get_string('supportfilesmarkown', 'local_coderunner_manager'),
+            };
+            $notes[] = \html_writer::tag('li', \html_writer::tag('strong', s($name)) . ' — ' . s($reason));
+        }
+        $mform->addElement(
+            'static',
+            'supportfilesmarks',
+            '',
+            $notes
+                ? \html_writer::tag('ul', implode('', $notes), ['class' => 'supportfilemarks'])
+                : s(get_string('supportfilesnone', 'local_coderunner_manager'))
+        );
+    }
+
+    /**
+     * The files currently in the support files draft area, keyed by filename.
+     *
+     * @return \stored_file[] the files, or an empty array when there is no area.
+     */
+    protected function draft_files(): array {
+        global $USER;
+
+        $draftitemid = (int) ($this->_customdata['draftitemid'] ?? 0);
+        if (!$draftitemid) {
+            return [];
+        }
+
+        $files = [];
+        foreach (get_file_storage()->get_area_files(
+            \context_user::instance($USER->id)->id,
+            'user',
+            'draft',
+            $draftitemid,
+            'filename',
+            false
+        ) as $file) {
+            $files[$file->get_filename()] = $file;
+        }
+        return $files;
+    }
+
+    /**
+     * The parent this form is working against, as its caller resolved it.
+     *
+     * Named apart from the static effective_parentid(), which is what edit.php
+     * calls to work the answer out before building the form; by here it is
+     * settled and arrives as customdata.
+     *
+     * @return int|null the parent prototype id, or null for a root prototype.
+     */
+    protected function form_parentid(): ?int {
+        $parentid = (int) ($this->_customdata['parentid'] ?? 0);
+        return $parentid ?: null;
     }
 
     /**

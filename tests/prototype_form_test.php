@@ -480,4 +480,145 @@ final class prototype_form_test extends \advanced_testcase {
             'The section marked two fields and explained nothing.'
         );
     }
+    /**
+     * Support files have a section of their own, not a place under Identity.
+     *
+     * They merge along the chain by filename, which is the behaviour of the
+     * collected settings and not of the identity fields they used to sit
+     * beside. Filed with those, the section carried no change count and the
+     * file manager showed only the prototype's own files, so a prototype
+     * owning three and inheriting nineteen read as a prototype with three.
+     */
+    public function test_support_files_have_their_own_section(): void {
+        $parent = $this->repo->create('parent', SITEID, new override_set(), files: [
+            $this->stored_file('shared.py', 'print(1)'),
+        ]);
+        $child = $this->repo->create('child', SITEID, new override_set(), $parent->id);
+
+        $mform = $this->quickform($this->build_form_with_draft($child, [
+            $this->stored_file('mine.py', 'own'),
+        ]));
+
+        $this->assertTrue($mform->elementExists('supportfilesheader'));
+        $this->assertTrue($mform->elementExists('supportfiles'));
+        $this->assertTrue($mform->elementExists('supportfilesinheritednote'));
+        $this->assertTrue($mform->elementExists('supportfilesmarks'));
+
+        // The inherited file is named rather than being put in the manager,
+        // which would make the author own a copy of it on the next save.
+        $note = $mform->getElement('supportfilesinheritednote')->toHtml();
+        $this->assertStringContainsString('shared.py', $note);
+        $this->assertStringContainsString('parent', $note);
+    }
+
+    /**
+     * The header counts what the prototype does that its parent does not, so a
+     * redundant copy is not a change.
+     *
+     * The same rule settings_form::changed_count() settled for overrides. A
+     * reparented prototype owning twenty copies of its parent's files would
+     * otherwise report twenty changes while changing nothing.
+     */
+    public function test_the_header_counts_only_files_that_change_something(): void {
+        $parent = $this->repo->create('parent', SITEID, new override_set(), files: [
+            $this->stored_file('shared.py', 'print(1)'),
+            $this->stored_file('changed.py', 'parent'),
+        ]);
+        $child = $this->repo->create('child', SITEID, new override_set(), $parent->id);
+
+        // One redundant, one shadowing, one its own: two changes, not three.
+        $mform = $this->quickform($this->build_form_with_draft($child, [
+            $this->stored_file('shared.py', 'print(1)'),
+            $this->stored_file('changed.py', 'child'),
+            $this->stored_file('mine.py', 'own'),
+        ]));
+
+        $label = $mform->getElement('supportfilesheader')->toHtml();
+        $this->assertStringContainsString(
+            get_string('sectionchanged', 'qtype_coderunner', 2),
+            $label,
+            'A redundant copy changes nothing, so it is not counted.'
+        );
+
+        $marks = $mform->getElement('supportfilesmarks')->toHtml();
+        $this->assertStringContainsString('could be removed', $marks, 'The redundant file says so.');
+    }
+
+    /**
+     * A prototype with no ancestors has nothing to inherit and says so.
+     */
+    public function test_a_root_prototype_reports_nothing_inherited(): void {
+        $root = $this->repo->create('root', SITEID, new override_set());
+
+        $mform = $this->quickform($this->build_form_with_draft($root, [
+            $this->stored_file('a.py', 'x'),
+        ]));
+
+        $this->assertStringContainsString(
+            get_string('supportfilesinheritednone', 'local_coderunner_manager'),
+            $mform->getElement('supportfilesinheritednote')->toHtml()
+        );
+    }
+
+    /**
+     * Build the form with a draft area holding the given files.
+     *
+     * The section reads the draft rather than the stored version, because that
+     * is what the author is looking at, so a test of it has to supply one.
+     *
+     * @param prototype $prototype the prototype being edited.
+     * @param \stored_file[] $files the files to put in the draft area.
+     * @return prototype_form the form.
+     */
+    private function build_form_with_draft(prototype $prototype, array $files): prototype_form {
+        global $USER;
+
+        $draftid = file_get_unused_draft_itemid();
+        $fs = get_file_storage();
+        foreach ($files as $file) {
+            $fs->create_file_from_storedfile([
+                'contextid' => \context_user::instance($USER->id)->id,
+                'component' => 'user',
+                'filearea' => 'draft',
+                'itemid' => $draftid,
+                'filepath' => '/',
+                'filename' => $file->get_filename(),
+            ], $file);
+        }
+
+        $inherited = $prototype->parentid()
+            ? $this->repo->chain_for($prototype->parentid())->resolve()
+            : (new prototype_chain([]))->resolve();
+
+        return new prototype_form(null, [
+            'prototype' => $prototype,
+            'inherited' => $inherited,
+            'own' => $prototype->currentversion->overrides,
+            'parentid' => $prototype->parentid() ?? 0,
+            'parents' => [0 => 'None'],
+            'courseid' => SITEID,
+            'readonly' => false,
+            'draftitemid' => $draftid,
+        ]);
+    }
+
+    /**
+     * A stored file to seed a draft area or a prototype version from.
+     *
+     * @param string $filename its name.
+     * @param string $content its content, which decides its hash.
+     * @return \stored_file the file.
+     */
+    private function stored_file(string $filename, string $content): \stored_file {
+        static $itemid = 0;
+
+        return get_file_storage()->create_file_from_string([
+            'contextid' => \context_system::instance()->id,
+            'component' => 'local_coderunner_manager',
+            'filearea' => 'testsource',
+            'itemid' => ++$itemid,
+            'filepath' => '/',
+            'filename' => $filename,
+        ], $content);
+    }
 }

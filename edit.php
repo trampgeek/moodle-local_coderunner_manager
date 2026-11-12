@@ -163,6 +163,12 @@ $form = new prototype_form($url, [
     'courseid' => $courseid,
     'readonly' => $readonly,
     'language' => $language,
+    // The support files section classifies what is in the draft area, not what
+    // the stored version holds, so it needs the id of the area prepared above.
+    // The form cannot recover it: file_get_submitted_draft_itemid() returns a
+    // fresh id when nothing was submitted, which would be a different, empty
+    // area.
+    'draftitemid' => $draftid,
 ]);
 
 $form->set_data(['supportfiles' => $draftid]);
