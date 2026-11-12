@@ -89,7 +89,7 @@ class version_diff {
             $out .= \html_writer::tag(
                 'td',
                 s(self::change_label($name)),
-                ['class' => 'text-nowrap font-weight-bold']
+                ['class' => 'text-nowrap fw-bold']
             );
             $out .= \html_writer::tag('td', self::change_value($name, $difference['from']), ['class' => 'w-50']);
             $out .= \html_writer::tag('td', self::change_value($name, $difference['to']), ['class' => 'w-50']);
