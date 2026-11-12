@@ -229,7 +229,18 @@ class question_migrator {
      * @return int[] the context ids.
      */
     protected function prototype_contexts(int $courseid): array {
+        global $CFG;
+
         if (!isset($this->contextsbycourse[$courseid])) {
+            // qtype_coderunner lives in the question type's questiontype.php,
+            // not in its classes/ directory, so Moodle's class loader cannot
+            // find it: it is loaded only by whatever required that file. A web
+            // request has, by the time it reaches a question; the restore does
+            // it explicitly; the test files each do it themselves. Cron does
+            // not, and so the sweep died on its first question with "Class
+            // qtype_coderunner not found" every time the task ran.
+            require_once($CFG->dirroot . '/question/type/coderunner/questiontype.php');
+
             $this->contextsbycourse[$courseid] = \qtype_coderunner::prototype_contexts(
                 \context_course::instance($courseid)
             );

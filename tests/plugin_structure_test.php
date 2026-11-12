@@ -120,4 +120,99 @@ final class plugin_structure_test extends \advanced_testcase {
         $this->assertSame(prototype_chain::HARD_MAX_DEPTH, $chain->depth());
         $this->assertTrue($chain->exceeds_advisory_depth());
     }
+
+    /**
+     * Any file that uses the qtype_coderunner class must load it itself.
+     *
+     * questiontype.php sits in the question type's root rather than its
+     * classes/ directory, so Moodle's class loader cannot find it and the
+     * class exists only in a process where something has required that file.
+     * Web requests and the restore do; cron does not. The prototype sweep
+     * called qtype_coderunner::prototype_contexts() without requiring it and
+     * so threw "Class qtype_coderunner not found" on its first question every
+     * time cron ran the install task, leaving a restored course's questions
+     * with null prototype ids.
+     *
+     * The test suite could not catch that, which is why this check is
+     * structural: every test file that touches the class requires
+     * questiontype.php at the top for its own sake, so by the time any test
+     * runs the class is loaded and the dependency is invisible. Only reading
+     * the source shows it.
+     *
+     * The scan covers the question type as well as the manager, because the
+     * sweep runs across both and the same trap caught the migration verifier.
+     */
+    public function test_users_of_the_qtype_class_require_its_file(): void {
+        global $CFG;
+
+        $roots = [
+            $CFG->dirroot . '/local/coderunner_manager',
+            $CFG->dirroot . '/question/type/coderunner/classes',
+        ];
+
+        $offenders = [];
+        $checked = 0;
+        foreach ($roots as $root) {
+            $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root));
+            foreach ($files as $file) {
+                if ($file->getExtension() !== 'php' || strpos($file->getPathname(), '/tests/') !== false) {
+                    continue;
+                }
+                $code = file_get_contents($file->getPathname());
+                if (!self::uses_the_qtype_class($code)) {
+                    continue;
+                }
+                $checked++;
+                if (strpos($code, 'questiontype.php') === false) {
+                    $offenders[] = str_replace($CFG->dirroot, '', $file->getPathname());
+                }
+            }
+        }
+
+        $this->assertGreaterThan(0, $checked, 'The scan should have found some users of the class.');
+        $this->assertSame(
+            [],
+            $offenders,
+            'These files use qtype_coderunner without requiring questiontype.php, so they will '
+                . "fail in any process that has not loaded it, such as cron:\n" . implode("\n", $offenders)
+        );
+    }
+
+    /**
+     * Whether the given source actually uses the qtype_coderunner class.
+     *
+     * The source is tokenised rather than searched, for two reasons. The
+     * docblocks discuss the class by name in the same `Class::method()` form a
+     * call takes, and `namespace qtype_coderunner;` heads most of the question
+     * type's own files; a plain text scan reports both. So the name counts only
+     * where it is followed by `::` or preceded by `new`, which is every way
+     * this class is reached — it is instantiated or called statically, never
+     * extended or type-hinted.
+     *
+     * @param string $code the file's source.
+     * @return bool true if the code uses the class.
+     */
+    private static function uses_the_qtype_class(string $code): bool {
+        $tokens = array_values(array_filter(
+            token_get_all($code),
+            fn($token) => !is_array($token)
+                || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+        ));
+
+        foreach ($tokens as $i => $token) {
+            $name = is_array($token) ? $token[1] : null;
+            if ($name !== 'qtype_coderunner' && $name !== '\\qtype_coderunner') {
+                continue;
+            }
+            $next = $tokens[$i + 1] ?? null;
+            $previous = $tokens[$i - 1] ?? null;
+            if (is_array($next) && $next[0] === T_DOUBLE_COLON) {
+                return true;
+            }
+            if (is_array($previous) && $previous[0] === T_NEW) {
+                return true;
+            }
+        }
+        return false;
+    }
 }
