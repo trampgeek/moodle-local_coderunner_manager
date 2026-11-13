@@ -22,23 +22,30 @@
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
+use local_coderunner_manager\usage_report;
 
 require_once(__DIR__ . '/../../config.php');
 
 $id = required_param('id', PARAM_INT);
 
+// The scope the viewer is browsing in, not the prototype's own: this report
+// answers "what will I break if I change this?", which a teacher asks of a site
+// prototype their course depends on as readily as an administrator does. So the
+// capability is wanted where they are standing, and usage_report decides how
+// much of the answer they see.
+$courseid = optional_param('courseid', 0, PARAM_INT);
+
 $repo = new prototype_repository();
 $prototype = $repo->get_or_fail($id);
-$courseid = $prototype->courseid;
 
-require_login($courseid == SITEID ? null : $courseid);
-$context = $courseid == SITEID ? context_system::instance() : context_course::instance($courseid);
+require_login($courseid ?: null);
+$context = $courseid ? context_course::instance($courseid) : context_system::instance();
 require_capability('qtype/coderunner:management', $context);
 
-$url = new moodle_url('/local/coderunner_manager/usage.php', ['id' => $id]);
-$listurl = new moodle_url('/local/coderunner_manager/index.php', $courseid == SITEID ? [] : ['courseid' => $courseid]);
+$scope = $courseid ? ['courseid' => $courseid] : [];
+$url = new moodle_url('/local/coderunner_manager/usage.php', ['id' => $id] + $scope);
+$listurl = new moodle_url('/local/coderunner_manager/index.php', $scope);
 $title = get_string('usageof', 'local_coderunner_manager', $prototype->name);
 
 $PAGE->set_url($url);
@@ -50,7 +57,8 @@ $PAGE->navbar->add($title);
 
 $descendants = $repo->descendant_ids($id);
 $bycourse = $repo->dependants_by_course($id);
-$total = array_sum(array_column($bycourse, 'questions'));
+$report = usage_report::by_course_for_viewer($id, $repo);
+$total = $report['total'];
 
 echo $OUTPUT->header();
 
@@ -71,16 +79,13 @@ if ($descendants) {
             continue;
         }
         $own = $repo->usage_counts([$child->id])[$child->id] ?? ['questions' => 0];
-        // A child may belong to another course, or to the site, and this
-        // report takes its context from the prototype it is about — so a
-        // viewer who cannot open the child's report is given its name rather
-        // than a link to a refusal.
-        $label = prototype_candidates::may_manage($child)
-            ? html_writer::link(
-                new moodle_url('/local/coderunner_manager/usage.php', ['id' => $child->id]),
-                s($child->name)
-            )
-            : s($child->name);
+        // A child may belong to another course, or to the site. Its report is
+        // readable all the same, from the scope this viewer is browsing in, and
+        // shows them what they may see of it.
+        $label = html_writer::link(
+            new moodle_url('/local/coderunner_manager/usage.php', ['id' => $child->id] + $scope),
+            s($child->name)
+        );
         echo html_writer::tag('li', $label . ' — '
             . get_string('usagedirectquestions', 'local_coderunner_manager', $own['questions']));
     }
@@ -88,8 +93,9 @@ if ($descendants) {
 }
 
 // Questions, by course. A viewer sees the name of a course they can manage
-// CodeRunner questions in, and a count for every other, so that the totals
-// always add up without disclosing where the questions are.
+// CodeRunner questions in, with a link to the questions themselves, and every
+// other course lumped into one anonymous row, so that the totals always add up
+// without disclosing where the questions are.
 echo $OUTPUT->heading(get_string('usagequestions', 'local_coderunner_manager'), 3);
 
 if (!$bycourse) {
@@ -105,23 +111,32 @@ echo html_writer::tag('th', get_string('usagecourse', 'local_coderunner_manager'
 echo html_writer::tag('th', get_string('usagequestioncount', 'local_coderunner_manager'));
 echo html_writer::end_tag('tr');
 
-foreach ($bycourse as $row) {
-    $name = get_string('usageothercourse', 'local_coderunner_manager');
-
-    if ($row['courseid']) {
-        $coursecontext = context_course::instance($row['courseid'], IGNORE_MISSING);
-        if ($coursecontext && has_capability('qtype/coderunner:management', $coursecontext)) {
-            $course = get_course($row['courseid']);
-            $name = html_writer::link(
-                new moodle_url('/course/view.php', ['id' => $row['courseid']]),
-                format_string($course->shortname)
-            );
-        }
-    }
+foreach ($report['courses'] as $row) {
+    // The course name leads to the questions of this prototype in that course,
+    // which is what the report is for. The course itself is one click further
+    // on and was never the question being asked.
+    $name = html_writer::link(
+        new moodle_url('/local/coderunner_manager/questions.php', [
+            'id' => $id,
+            'incourse' => $row['courseid'],
+        ] + $scope),
+        s($row['name'])
+    );
 
     echo html_writer::start_tag('tr');
     echo html_writer::tag('td', $name);
     echo html_writer::tag('td', $row['questions']);
+    echo html_writer::end_tag('tr');
+}
+
+if ($report['other']['questions']) {
+    echo html_writer::start_tag('tr');
+    echo html_writer::tag('td', get_string(
+        'usageothercourses',
+        'local_coderunner_manager',
+        $report['other']['courses']
+    ));
+    echo html_writer::tag('td', $report['other']['questions']);
     echo html_writer::end_tag('tr');
 }
 

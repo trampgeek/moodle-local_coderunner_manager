@@ -128,6 +128,11 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
  *
  * @param prototype $prototype the prototype to print.
  * @param array $childrenof prototypes indexed by their parent's id.
+ * @param array $usage question and child counts, indexed by prototype id.
+ * @param array $coursenames course shortnames, indexed by course id.
+ * @param int $browsingcourseid the course whose library this is, zero for the
+ *      site's. Carried into the usage report so that it keeps the viewer's
+ *      scope rather than taking the prototype's.
  * @param int $depth how deep in the tree this prototype sits.
  */
 function print_prototype_row(
@@ -135,6 +140,7 @@ function print_prototype_row(
     array $childrenof,
     array $usage,
     array $coursenames,
+    int $browsingcourseid = 0,
     int $depth = 0
 ): void {
     $version = $prototype->currentversion;
@@ -159,18 +165,22 @@ function print_prototype_row(
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
     echo html_writer::tag('td', $version ? $version->overrides->count() : '-');
+    // The count is a link whoever is looking, because the report is readable by
+    // anyone who can see the row: it answers what a change to this prototype
+    // would break, which is as much a teacher's question about a site prototype
+    // as an administrator's. What the report then shows depends on the viewer —
+    // see local_coderunner_manager\usage_report.
     $used = $counts['questions'] || $counts['children'];
     $usagecell = '';
-    if ($used && prototype_candidates::may_manage($prototype)) {
+    if ($used) {
         $usagecell = html_writer::link(
-            new moodle_url('/local/coderunner_manager/usage.php', ['id' => $prototype->id]),
+            new moodle_url(
+                '/local/coderunner_manager/usage.php',
+                ['id' => $prototype->id] + ($browsingcourseid ? ['courseid' => $browsingcourseid] : [])
+            ),
             $counts['questions'] ?: '0',
             ['title' => get_string('usagereport', 'local_coderunner_manager')]
         );
-    } else if ($used) {
-        // The count without the report, which this user may not open: the
-        // number is the useful half and it is already on the page.
-        $usagecell = $counts['questions'] ?: '0';
     }
     echo html_writer::tag('td', $usagecell);
     echo html_writer::tag('td', $counts['children'] ?: '');
@@ -178,7 +188,7 @@ function print_prototype_row(
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
-        print_prototype_row($child, $childrenof, $usage, $coursenames, $depth + 1);
+        print_prototype_row($child, $childrenof, $usage, $coursenames, $browsingcourseid, $depth + 1);
     }
 }
 
@@ -189,7 +199,7 @@ foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children',
 }
 echo html_writer::end_tag('tr');
 foreach ($childrenof[0] ?? [] as $root) {
-    print_prototype_row($root, $childrenof, $usage, $coursenames);
+    print_prototype_row($root, $childrenof, $usage, $coursenames, (int) $courseid);
 }
 echo html_writer::end_tag('table');
 

@@ -204,24 +204,29 @@ class prototype_candidates {
     }
 
     /**
-     * Whether this user may open a prototype's own pages — its editor or its
-     * usage report.
+     * Whether this user holds the capability in a prototype's own scope.
      *
-     * The same test those pages make, and made in the same way: each takes its
-     * context from the prototype's **own** course, so a site prototype is
-     * governed by the capability at system level. A teacher holding
-     * `qtype/coderunner:management` in one course does not hold it there, and
-     * both the course prototypes page and a usage report list prototypes of
-     * other scopes beside the ones they can open — so every such row offered a
-     * link that answered "you don't have permission". Asked here so that the
-     * pages and the links cannot disagree.
+     * The test the editor makes, and made in the same way: it takes its context
+     * from the prototype's **own** course, so a site prototype is governed by
+     * the capability at system level and a teacher holding
+     * `qtype/coderunner:management` in one course does not hold it there. The
+     * library lists prototypes of other scopes beside the ones they can edit,
+     * so every such row offered a link that answered "you don't have
+     * permission"; asked here so that the page and the link cannot disagree.
+     *
+     * The **usage report** no longer asks this, and `may_edit()` is the only
+     * thing that does. A report of what depends on a prototype is readable from
+     * the scope the viewer is browsing in, whatever scope the prototype belongs
+     * to, because that is as much a teacher's question about a site prototype
+     * as an administrator's; {@see usage_report} decides how much of the answer
+     * each viewer is shown.
      *
      * Not the same question as {@see may_use_course()}, which is about
      * building a question on a prototype: a site prototype is offered to every
-     * author, while its pages are not.
+     * author, while its editor is not.
      *
      * @param prototype $prototype the prototype.
-     * @return bool true if its pages are reachable.
+     * @return bool true if the capability is held in its scope.
      */
     public static function may_manage(prototype $prototype): bool {
         $context = $prototype->is_site_prototype()
@@ -236,7 +241,7 @@ class prototype_candidates {
      * Stricter than {@see may_manage()}: a site prototype is every course's
      * business, so `edit.php` reserves it to administrators whatever the
      * capability says (design section 8). The usage report of a site prototype
-     * is readable by anyone the capability allows; the editor is not.
+     * is readable by any viewer who can see the row; the editor is not.
      *
      * @param prototype $prototype the prototype.
      * @return bool true if the editor is reachable.

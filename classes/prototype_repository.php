@@ -383,6 +383,97 @@ class prototype_repository {
     }
 
     /**
+     * The questions of one course that depend on a prototype, named.
+     *
+     * The drill-down behind {@see dependants_by_course()}: the same questions,
+     * listed rather than counted, for the one course the viewer asked about.
+     * Counted the same way, one per question bank entry, with the highest
+     * version that uses the prototype standing for the question — a question
+     * whose older version used something else is one question here and one
+     * question there, which is how an author sees it.
+     *
+     * The course restriction is made in SQL, over the context ids beneath the
+     * course, because a widely used prototype has thousands of dependants and
+     * only a few of them belong to the course being asked about.
+     *
+     * @param int $prototypeid the prototype asked about.
+     * @param int $courseid the course to look in. Zero means the banks that
+     *      belong to no course, which is the system context.
+     * @return array list of objects with questionid, name, version, status,
+     *      entryid, categoryid, categoryname, contextid and prototypeid, by
+     *      name. The category name is the category's own, not its path: two
+     *      categories of one bank may share a name, which is how the question
+     *      bank's own filter shows them too.
+     */
+    public function dependant_questions(int $prototypeid, int $courseid): array {
+        global $DB;
+
+        $contextids = $this->bank_contextids_for_course($courseid);
+        if (!$contextids) {
+            return [];
+        }
+
+        $ids = array_merge([$prototypeid], $this->descendant_ids($prototypeid));
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'p');
+        [$ctxsql, $ctxparams] = $DB->get_in_or_equal($contextids, SQL_PARAMS_NAMED, 'ctx');
+
+        $rows = $DB->get_records_sql("
+            SELECT qv.id AS versionid, q.id AS questionid, q.name, qv.version, qv.status,
+                   qbe.id AS entryid, qc.id AS categoryid, qc.name AS categoryname,
+                   qc.contextid, o.prototypeid
+              FROM {question_coderunner_options} o
+              JOIN {question} q ON q.id = o.questionid
+              JOIN {question_versions} qv ON qv.questionid = q.id
+              JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+              JOIN {question_categories} qc ON qc.id = qbe.questioncategoryid
+             WHERE o.prototypeid $insql
+                   AND qc.contextid $ctxsql
+          ORDER BY qv.version", array_merge($params, $ctxparams));
+
+        // One row per question, the latest version of it that uses the
+        // prototype. The query is ordered by version, so the last row wins.
+        $questions = [];
+        foreach ($rows as $row) {
+            $questions[(int) $row->entryid] = $row;
+        }
+
+        \core_collator::asort_objects_by_property($questions, 'name');
+        return array_values($questions);
+    }
+
+    /**
+     * The contexts a course's question banks can live in.
+     *
+     * A bank is a module instance of the course, so the course's own context
+     * and everything beneath it is the set a question category may sit in. The
+     * course context itself is included because categories made before question
+     * banks became modules are still there.
+     *
+     * @param int $courseid the course, or zero for the banks outside any course.
+     * @return array context ids.
+     */
+    protected function bank_contextids_for_course(int $courseid): array {
+        global $DB;
+
+        if (!$courseid) {
+            return [(int) \context_system::instance()->id];
+        }
+
+        $coursecontext = \context_course::instance($courseid, IGNORE_MISSING);
+        if (!$coursecontext) {
+            return [];
+        }
+
+        $below = $DB->get_fieldset_select(
+            'context',
+            'id',
+            $DB->sql_like('path', ':path'),
+            ['path' => $coursecontext->path . '/%']
+        );
+        return array_merge([(int) $coursecontext->id], array_map('intval', $below));
+    }
+
+    /**
      * The saved but unpublished version of a prototype, if it has one.
      *
      * @param \stdClass $record the prototype's row.
