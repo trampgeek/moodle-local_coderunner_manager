@@ -34,6 +34,7 @@ $string['nameinuseincourse'] = 'The prototype name "{$a}" is already used by a p
 $string['headerfieldsset'] = 'Fields set';
 $string['headerprototype'] = 'Prototype';
 $string['headerscope'] = 'Scope';
+$string['headeractions'] = 'Actions';
 $string['headerchildren'] = 'Child prototypes';
 $string['headerquestions'] = 'Questions';
 $string['headersummary'] = 'Summary';
@@ -56,6 +57,7 @@ $string['taskinstallprototypes'] = 'Install CodeRunner question prototypes';
 $string['noprototypesyet'] = 'No prototypes have been recorded yet. They are created by the "Install CodeRunner question prototypes" task, which runs on cron after an install or upgrade.';
 $string['prototypelist'] = 'CodeRunner prototypes';
 $string['scopesite'] = 'Site';
+$string['prototypehasquestions'] = 'Prototype "{$a->name}" cannot be deleted because {$a->count} question(s) use it.';
 $string['prototypeinuse'] = 'Prototype "{$a}" cannot be deleted because other prototypes derive from it.';
 $string['prototypenotfound'] = 'There is no CodeRunner prototype with id {$a}.';
 $string['commitmessage'] = 'What changed';
@@ -159,3 +161,12 @@ $string['supportfilesmarkredundant'] = 'Identical to the copy inherited from {$a
 $string['supportfilesmarkshadowing'] = 'Differs from the copy inherited from {$a}, which it replaces.';
 $string['supportfilesnone'] = 'This prototype supplies no support files of its own.';
 $string['supportfilesownheading'] = 'This prototype\'s own files';
+
+// Deleting a prototype, from the library page.
+$string['deleteprototype'] = 'Delete';
+$string['deleteprototypeconfirm'] = 'Delete the prototype "{$a->name}"?
+
+Warning - this will delete all {$a->versions} version(s) of this prototype, irrecoverably.';
+$string['deleteprototypedone'] = 'Prototype "{$a}" was deleted.';
+$string['deleteprototypenotallowed'] = 'This prototype cannot be deleted.';
+$string['deleteundeletable'] = 'Cannot be deleted: {$a}';

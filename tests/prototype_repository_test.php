@@ -322,6 +322,105 @@ final class prototype_repository_test extends \advanced_testcase {
     }
 
     /**
+     * A prototype questions depend on cannot be deleted.
+     *
+     * The case that matters most, because a question holds its prototype's id:
+     * deleting one out from under a question leaves that question
+     * unresolvable, which is the state the additive design exists to prevent.
+     */
+    public function test_a_prototype_with_questions_cannot_be_deleted(): void {
+        $prototype = $this->repo->create('used', $this->courseid, new override_set());
+        $this->make_dependent_question((int) $prototype->id);
+
+        $reason = $this->repo->undeletable_reason($prototype);
+        $this->assertNotNull($reason);
+        $this->assertStringContainsString('used', $reason);
+
+        $this->expectException(\moodle_exception::class);
+        $this->repo->delete($prototype);
+    }
+
+    /**
+     * The site defaults cannot be deleted whatever depends on it.
+     */
+    public function test_the_site_defaults_cannot_be_deleted(): void {
+        global $DB;
+
+        // Marked rather than installed: the real one is created by the install
+        // task, which a unit test's empty tables have not run.
+        $prototype = $this->repo->create('Site defaults', SITEID, new override_set());
+        $DB->set_field(prototype_repository::PROTOTYPES, 'issitedefaults', 1, ['id' => $prototype->id]);
+        $defaults = $this->repo->get_or_fail($prototype->id);
+
+        $this->assertTrue($defaults->issitedefaults, 'The fixture is the site defaults.');
+        $this->assertNotNull(
+            $this->repo->undeletable_reason($defaults),
+            'It sits at the root of every chain, so it is refused however little depends on it.'
+        );
+        $this->assertNotNull(
+            $this->repo->undeletable_reason($defaults, ['questions' => 0, 'children' => 0]),
+            'And refused even when a caller reports nothing depending on it.'
+        );
+    }
+
+    /**
+     * A prototype nothing depends on reports no reason, and goes.
+     */
+    public function test_an_unused_prototype_may_be_deleted(): void {
+        $prototype = $this->repo->create('free', $this->courseid, new override_set());
+
+        $this->assertNull($this->repo->undeletable_reason($prototype));
+
+        $this->repo->delete($prototype);
+        $this->assertNull($this->repo->get($prototype->id));
+    }
+
+    /**
+     * Counts handed in are used in place of the queries.
+     *
+     * What lets a page decide every row's button without two queries a row.
+     * Asserted because the shortcut is the one way the rule could come to
+     * disagree with itself.
+     */
+    public function test_counts_may_be_supplied_instead_of_counted(): void {
+        $prototype = $this->repo->create('free', $this->courseid, new override_set());
+
+        $this->assertNull(
+            $this->repo->undeletable_reason($prototype, ['questions' => 0, 'children' => 0])
+        );
+        $this->assertNotNull(
+            $this->repo->undeletable_reason($prototype, ['questions' => 3, 'children' => 0]),
+            'Questions reported by the caller refuse the deletion.'
+        );
+        $this->assertNotNull(
+            $this->repo->undeletable_reason($prototype, ['questions' => 0, 'children' => 1]),
+            'Children reported by the caller refuse it too.'
+        );
+    }
+
+    /**
+     * A question in this course that uses the given prototype.
+     *
+     * @param int $prototypeid the prototype it is to depend on.
+     * @return \stdClass the question.
+     */
+    private function make_dependent_question(int $prototypeid): \stdClass {
+        global $DB;
+
+        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $category = $generator->create_question_category(
+            ['contextid' => \context_course::instance($this->courseid)->id]
+        );
+        $question = $generator->create_question('coderunner', null, [
+            'category' => $category->id,
+            'name' => 'Depends on it',
+        ]);
+        $DB->set_field('question_coderunner_options', 'prototypeid', $prototypeid, ['questionid' => $question->id]);
+
+        return $question;
+    }
+
+    /**
      * Deleting an unused prototype removes its whole history.
      */
     public function test_deleting_removes_the_history(): void {

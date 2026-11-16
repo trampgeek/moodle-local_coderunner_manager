@@ -52,6 +52,51 @@ $intro = $courseid && $courseid != SITEID
     : get_string('prototypelist_intro_site', 'local_coderunner_manager');
 
 $repo = new prototype_repository();
+
+// Deleting one, which happens from this page because this is where an author
+// surveys the library. An edit they regret is undone from the editor's own
+// history instead, by restoring an earlier version.
+$deleteid = optional_param('delete', 0, PARAM_INT);
+if ($deleteid) {
+    $doomed = $repo->get_or_fail($deleteid);
+
+    // The capability is checked again here, against the prototype's own scope
+    // rather than the page's: this listing shows a course the site prototypes
+    // it may use, and a teacher who may manage their own course must not be
+    // able to delete one of those by its id.
+    if (!prototype_candidates::may_edit($doomed)) {
+        throw new moodle_exception('nopermissions', 'error', $url, 'delete prototype');
+    }
+    $reason = $repo->undeletable_reason($doomed);
+    if ($reason !== null) {
+        throw new moodle_exception('deleteundeletable', 'local_coderunner_manager', $url, $reason);
+    }
+
+    if (optional_param('confirm', 0, PARAM_BOOL)) {
+        require_sesskey();
+        $name = $doomed->name;
+        $repo->delete($doomed);
+        redirect(
+            $url,
+            get_string('deleteprototypedone', 'local_coderunner_manager', $name),
+            null,
+            \core\output\notification::NOTIFY_SUCCESS
+        );
+    }
+
+    echo $OUTPUT->header();
+    echo $OUTPUT->confirm(
+        get_string('deleteprototypeconfirm', 'local_coderunner_manager', (object) [
+            'name' => $doomed->name,
+            'versions' => count($repo->history($doomed->id)),
+        ]),
+        new moodle_url($url, ['delete' => $doomed->id, 'confirm' => 1, 'sesskey' => sesskey()]),
+        $url
+    );
+    echo $OUTPUT->footer();
+    exit;
+}
+
 $prototypes = $repo->list_for_course($courseid ?: SITEID);
 
 // Everything the rows need, gathered before the tree is walked rather than
@@ -124,6 +169,47 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
 }
 
 /**
+ * The actions cell for one prototype: a Delete button, disabled with its
+ * reason where the prototype may not go.
+ *
+ * Disabled rather than absent, so that an author looking for the action finds
+ * it and is told why it is not available, instead of hunting a page that
+ * simply does not offer one. The reason comes from the repository, which is
+ * also what refuses the deletion itself, so the two agree.
+ *
+ * @param prototype $prototype the prototype.
+ * @param array $counts its question and child counts, already gathered.
+ * @param moodle_url $pageurl the library page, to come back to.
+ * @return string the rendered cell.
+ */
+function prototype_actions_cell(prototype $prototype, array $counts, moodle_url $pageurl): string {
+    global $repo;
+
+    if (!prototype_candidates::may_edit($prototype)) {
+        // Not theirs to change, so not theirs to delete; the row still shows
+        // what the prototype is and what depends on it.
+        return '';
+    }
+
+    $label = get_string('deleteprototype', 'local_coderunner_manager');
+    $reason = $repo->undeletable_reason($prototype, $counts);
+
+    if ($reason !== null) {
+        return html_writer::tag('span', $label, [
+            'class' => 'btn btn-sm btn-outline-danger disabled',
+            'aria-disabled' => 'true',
+            'title' => get_string('deleteundeletable', 'local_coderunner_manager', $reason),
+        ]);
+    }
+
+    return html_writer::link(
+        new moodle_url($pageurl, ['delete' => $prototype->id]),
+        $label,
+        ['class' => 'btn btn-sm btn-outline-danger']
+    );
+}
+
+/**
  * Print one prototype and, beneath it, everything that derives from it.
  *
  * @param prototype $prototype the prototype to print.
@@ -143,6 +229,8 @@ function print_prototype_row(
     int $browsingcourseid = 0,
     int $depth = 0
 ): void {
+    global $PAGE;
+
     $version = $prototype->currentversion;
     $label = prototype_name_cell($prototype, $depth);
 
@@ -185,6 +273,11 @@ function print_prototype_row(
     echo html_writer::tag('td', $usagecell);
     echo html_writer::tag('td', $counts['children'] ?: '');
     echo html_writer::tag('td', s($version ? $version->summary : ''), ['class' => 'w-50']);
+    echo html_writer::tag(
+        'td',
+        prototype_actions_cell($prototype, $counts, $PAGE->url),
+        ['class' => 'text-nowrap']
+    );
     echo html_writer::end_tag('tr');
 
     foreach ($childrenof[$prototype->id] ?? [] as $child) {
@@ -194,7 +287,7 @@ function print_prototype_row(
 
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
-foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary'] as $header) {
+foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary', 'actions'] as $header) {
     echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
 }
 echo html_writer::end_tag('tr');

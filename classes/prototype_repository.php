@@ -921,6 +921,63 @@ class prototype_repository {
     }
 
     /**
+     * Why this prototype cannot be deleted, or null if it can.
+     *
+     * The one rule, so that the button the library page offers and the refusal
+     * {@see delete()} would make cannot drift apart: a disabled button whose
+     * tooltip disagrees with the error is worse than no button at all.
+     *
+     * Counts may be passed in by a caller that has them already, so that a
+     * page listing scores of prototypes can decide every row's button without
+     * two more queries per row. The rule is still only written once; only
+     * where the two numbers come from differs. {@see delete()} passes nothing,
+     * because the decision it makes has to be made on the current state.
+     *
+     * @param prototype $prototype the prototype in question.
+     * @param array|null $counts ['questions' => int, 'children' => int] if the
+     *      caller has them, as {@see usage_counts()} returns them.
+     * @return string|null the reason, ready to show, or null if it may go.
+     */
+    public function undeletable_reason(prototype $prototype, ?array $counts = null): ?string {
+        global $DB;
+
+        if ($prototype->issitedefaults) {
+            return get_string('cannotdeletesitedefaults', 'local_coderunner_manager');
+        }
+
+        $children = $counts !== null
+            ? (int) ($counts['children'] ?? 0)
+            : count($this->children_of($prototype->id));
+        if ($children) {
+            return get_string('prototypeinuse', 'local_coderunner_manager', $prototype->name);
+        }
+
+        // A question holds its prototype's id, so deleting one a question uses
+        // leaves that question unresolvable -- the broken state the additive
+        // design exists to avoid, and the design says twice that the manager
+        // refuses it. Counted the way usage_counts() counts, by question
+        // rather than by version, so the refusal agrees with the number the
+        // library page shows beside the prototype. Descendants need no
+        // separate check: a prototype with children is refused above, so by
+        // here it has none for a question to reach it through.
+        $dependants = $counts !== null ? (int) ($counts['questions'] ?? 0) : $DB->count_records_sql("
+            SELECT COUNT(DISTINCT qbe.id)
+              FROM {question_coderunner_options} o
+              JOIN {question} q ON q.id = o.questionid
+              JOIN {question_versions} qv ON qv.questionid = q.id
+              JOIN {question_bank_entries} qbe ON qbe.id = qv.questionbankentryid
+             WHERE o.prototypeid = :id", ['id' => $prototype->id]);
+        if ($dependants) {
+            return get_string('prototypehasquestions', 'local_coderunner_manager', (object) [
+                'name' => $prototype->name,
+                'count' => $dependants,
+            ]);
+        }
+
+        return null;
+    }
+
+    /**
      * Delete a prototype and its whole version history.
      *
      * Refused while any other prototype derives from it. Once questions refer to
@@ -933,14 +990,13 @@ class prototype_repository {
     public function delete(prototype $prototype): void {
         global $DB;
 
+        $reason = $this->undeletable_reason($prototype);
+        if ($reason !== null) {
+            throw new \moodle_exception('deleteundeletable', 'local_coderunner_manager', '', $reason);
+        }
+
         $transaction = $DB->start_delegated_transaction();
 
-        if ($prototype->issitedefaults) {
-            throw new \moodle_exception('cannotdeletesitedefaults', 'local_coderunner_manager');
-        }
-        if ($this->children_of($prototype->id)) {
-            throw new \moodle_exception('prototypeinuse', 'local_coderunner_manager', '', $prototype->name);
-        }
         $fs = get_file_storage();
         $contextid = $this->file_contextid($prototype);
         foreach ($DB->get_fieldset_select(self::VERSIONS, 'id', 'prototypeid = :id', ['id' => $prototype->id]) as $vid) {
