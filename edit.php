@@ -25,6 +25,7 @@
 use local_coderunner_manager\form\prototype_form;
 use local_coderunner_manager\output\history_table;
 use local_coderunner_manager\output\version_diff;
+use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
@@ -108,13 +109,23 @@ $own = $editing ? $editing->overrides : new override_set([], $prototype->name ??
 
 // Candidate parents: anything this course can see, less the prototype itself
 // and anything descended from it, which would make a cycle.
-$parents = [0 => get_string('noparent', 'local_coderunner_manager')];
+//
+// Shown as the tree it is, indented by depth, the way the question form's
+// prototype picker shows the same library. It was a flat list of bare names
+// until an author pointed out that the two menus disagreed, which is
+// prototype_candidates::as_options()'s job to settle rather than this page's.
+$candidates = [];
 $descendants = $prototype ? $repo->descendant_ids($prototype->id) : [];
 foreach ($repo->list_for_course($courseid) as $candidate) {
     if ($prototype && ($candidate->id == $prototype->id || in_array($candidate->id, $descendants, true))) {
         continue;
     }
-    $parents[$candidate->id] = $candidate->name;
+    $candidates[$candidate->id] = $candidate;
+}
+
+$parents = [0 => get_string('noparent', 'local_coderunner_manager')];
+foreach ((new prototype_candidates())->as_options($candidates) as $id => $option) {
+    $parents[$id] = prototype_candidates::indented_label($option);
 }
 
 if (($publish || $discard) && !$readonly && $prototype) {

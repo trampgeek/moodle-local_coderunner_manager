@@ -431,6 +431,40 @@ final class prototype_candidates_test extends \advanced_testcase {
      * capability is enforced where the list is built and not only where it is
      * shown.
      */
+    /**
+     * One rule indents both menus that show the library.
+     *
+     * The question form's prototype picker and the prototype editor's
+     * *Inherits from* showed the same tree differently until they were given
+     * this method -- indented against a flat list of bare names -- which is
+     * the sort of difference an author notices and no test did.
+     *
+     * The escaping is asserted with it, because a prototype's name is
+     * author-supplied text and an option's text is written into a select
+     * unescaped, so this method is where that is dealt with for both menus.
+     */
+    public function test_one_rule_indents_both_library_menus(): void {
+        $this->assertSame(
+            'python3',
+            prototype_candidates::indented_label(['label' => 'python3', 'depth' => 0]),
+            'A root is not indented.'
+        );
+        $this->assertSame(
+            str_repeat('&nbsp;', 4) . 'python3_mine',
+            prototype_candidates::indented_label(['label' => 'python3_mine', 'depth' => 1]),
+            'Four non-breaking spaces to a level.'
+        );
+        $this->assertSame(
+            str_repeat('&nbsp;', 8) . 'deeper',
+            prototype_candidates::indented_label(['label' => 'deeper', 'depth' => 2])
+        );
+        $this->assertStringNotContainsString(
+            '<script>',
+            prototype_candidates::indented_label(['label' => '<script>bad()</script>', 'depth' => 0]),
+            'A name reaches the select unescaped, so it is escaped here.'
+        );
+    }
+
     public function test_the_second_step_refuses_a_course_without_the_capability(): void {
         $other = $this->getDataGenerator()->create_course();
         $this->make_prototype('theirs', (int) $other->id);

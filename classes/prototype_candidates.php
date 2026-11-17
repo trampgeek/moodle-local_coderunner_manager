@@ -418,6 +418,24 @@ class prototype_candidates {
     }
 
     /**
+     * One option's menu label, indented to show its depth in the tree.
+     *
+     * The single place the indentation is spelled, because both menus that
+     * show the library use it. Non-breaking spaces rather than padding: an
+     * option's text is the only thing a `select` lets us style, and core drops
+     * a class from an option (see `export_for_template()` in
+     * `lib/form/select.php`). The name is escaped here, because an option's
+     * text is written into the select unescaped and a prototype's name is
+     * author-supplied.
+     *
+     * @param array $option one entry of {@see as_options()}.
+     * @return string the label to show.
+     */
+    public static function indented_label(array $option): string {
+        return str_repeat('&nbsp;', 4 * (int) ($option['depth'] ?? 0)) . s($option['label']);
+    }
+
+    /**
      * Prototypes as picker options, in tree order and indented by depth.
      *
      * Depth is counted within the group rather than over the whole library, and
@@ -427,12 +445,19 @@ class prototype_candidates {
      * arises where a course prototype descends from a site one, which is the
      * common shape — a course's own type built on a built-in.
      *
+     * Public because two menus are built from it: the question form's
+     * prototype picker, through {@see groups_for_course()}, and the prototype
+     * editor's *Inherits from*. They showed the library differently until the
+     * second was given this one too -- a flat list of bare names against a
+     * tree -- which is the sort of difference an author notices and no test
+     * does.
+     *
      * @param prototype[] $prototypes the prototypes, keyed by id.
      * @param bool $withcourse true to label each with its course, which is what
      *      distinguishes one course's `python3_mine` from another's.
      * @return array id => ['label', 'depth', 'courseid', 'summary'].
      */
-    private function as_options(array $prototypes, bool $withcourse = false): array {
+    public function as_options(array $prototypes, bool $withcourse = false): array {
         $childrenof = [];
         foreach ($prototypes as $prototype) {
             $parentid = $prototype->parentid();
