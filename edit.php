@@ -147,6 +147,9 @@ $resolved = $effectiveparent
     ? $repo->chain_for($effectiveparent, $own)->resolve()
     : prototype_chain::from_arrays([$own->to_array()])->resolve();
 $language = (string) $resolved->get('language');
+// And whether the template is edited in Ace at all. Resolved from the same
+// chain, because a prototype inherits the setting like any other.
+$useace = (bool) $resolved->get('useace');
 
 // The file manager works through a draft area, seeded from the current
 // version's files. A prototype being created has none, and a draft area with
@@ -272,8 +275,11 @@ if (!$readonly && ($data = $form->get_data())) {
 
 // Code and JSON fields are edited in Ace, which the question type ships
 // along with the wrapper that attaches it (decision 22). The template is
-// highlighted in whatever language the prototype resolves to.
-settings_form::require_ace(prototype_form::sections(), $language, false, $readonly);
+// highlighted in whatever language the prototype resolves to, and is a plain
+// textarea where the prototype clears *Template uses ace* -- passed through so
+// that this editor and the question form behave identically, which is the
+// point of sharing settings_form at all.
+settings_form::require_ace(prototype_form::sections(), $language, false, $readonly, $useace);
 
 // And the script that rebuilds the form when the author changes the parent, so
 // that what each field inherits is the new parent's before anything is saved.
