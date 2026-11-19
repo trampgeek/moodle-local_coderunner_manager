@@ -1148,9 +1148,9 @@ class prototype_repository {
      * How many questions and child prototypes depend on each of the given
      * prototypes, directly.
      *
-     * Two grouped queries rather than one per prototype, because the library
-     * view asks about every prototype on the page at once and a course can
-     * have scores of them.
+     * Grouped queries rather than one per prototype, because the library view
+     * asks about every prototype on the page at once and a course can have
+     * scores of them.
      *
      * Questions are counted as an author counts them — one per question bank
      * entry, not one per stored version — since a question edited twenty times
@@ -1158,14 +1158,20 @@ class prototype_repository {
      * are counted; the usage report walks the whole subtree.
      *
      * @param int[] $prototypeids the prototypes to count for.
-     * @return array prototype id => ['questions' => int, 'children' => int].
+     * @param int $courseid a course to count children in as well, or zero for
+     *      the site-wide count alone. The key is absent rather than zero when
+     *      no course is given, because zero would read as "none here" when the
+     *      truth is that nobody asked.
+     * @return array prototype id => ['questions' => int, 'children' => int],
+     *      plus 'childrenincourse' => int when $courseid is given.
      */
-    public function usage_counts(array $prototypeids): array {
+    public function usage_counts(array $prototypeids, int $courseid = 0): array {
         global $DB;
 
         $counts = [];
         foreach ($prototypeids as $id) {
-            $counts[(int) $id] = ['questions' => 0, 'children' => 0];
+            $counts[(int) $id] = ['questions' => 0, 'children' => 0]
+                + ($courseid ? ['childrenincourse' => 0] : []);
         }
         if (!$prototypeids) {
             return $counts;
@@ -1193,6 +1199,24 @@ class prototype_repository {
           GROUP BY v.parentid", $params);
         foreach ($children as $row) {
             $counts[(int) $row->id]['children'] = (int) $row->n;
+        }
+
+        // The same count again, narrowed to one course. The library page shows
+        // both because the site-wide figure alone was read as this course's: a
+        // prototype with children in other courses looked as though it had
+        // them here, which is what the test server reported on 16 November.
+        // A second aggregate rather than a second method, so the page still
+        // asks once.
+        if ($courseid) {
+            $incourse = $DB->get_records_sql("
+                SELECT v.parentid AS id, COUNT(*) AS n
+                  FROM {" . self::PROTOTYPES . "} p
+                  JOIN {" . self::VERSIONS . "} v ON v.id = p.currentversionid
+                 WHERE v.parentid $insql AND p.courseid = :courseid
+              GROUP BY v.parentid", $params + ['courseid' => $courseid]);
+            foreach ($incourse as $row) {
+                $counts[(int) $row->id]['childrenincourse'] = (int) $row->n;
+            }
         }
 
         return $counts;

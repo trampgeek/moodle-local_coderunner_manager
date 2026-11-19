@@ -101,7 +101,7 @@ $prototypes = $repo->list_for_course($courseid ?: SITEID);
 
 // Everything the rows need, gathered before the tree is walked rather than
 // once per row: a course can hold scores of prototypes.
-$usage = $repo->usage_counts(array_keys($prototypes));
+$usage = $repo->usage_counts(array_keys($prototypes), $courseid ?: SITEID);
 $coursenames = $prototypes
     ? $DB->get_records_list('course', 'id', array_unique(array_column($prototypes, 'courseid')), '', 'id, shortname')
     : [];
@@ -246,7 +246,7 @@ function print_prototype_row(
         $scope = get_string('scopesite', 'local_coderunner_manager');
     }
 
-    $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0];
+    $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0, 'childrenincourse' => 0];
 
     echo html_writer::start_tag('tr');
     echo html_writer::tag('td', $label, ['class' => 'text-nowrap']);
@@ -271,7 +271,10 @@ function print_prototype_row(
         );
     }
     echo html_writer::tag('td', $usagecell);
-    echo html_writer::tag('td', $counts['children'] ?: '');
+    $childcell = $counts['children']
+        ? $counts['children'] . '/' . ($counts['childrenincourse'] ?? 0)
+        : '';
+    echo html_writer::tag('td', $childcell, ['class' => 'text-nowrap']);
     echo html_writer::tag('td', s($version ? $version->summary : ''), ['class' => 'w-50']);
     echo html_writer::tag(
         'td',
@@ -288,7 +291,18 @@ function print_prototype_row(
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
 foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary', 'actions'] as $header) {
-    echo html_writer::tag('th', get_string('header' . $header, 'local_coderunner_manager'));
+    $text = get_string('header' . $header, 'local_coderunner_manager');
+    if ($header === 'children') {
+        // Two numbers in the cell need saying which is which, and the heading
+        // is the only place to say it without a note under every table.
+        $text .= html_writer::empty_tag('br')
+            . html_writer::tag(
+                'small',
+                get_string('headerchildrenscope', 'local_coderunner_manager'),
+                ['class' => 'text-muted fw-normal']
+            );
+    }
+    echo html_writer::tag('th', $text);
 }
 echo html_writer::end_tag('tr');
 foreach ($childrenof[0] ?? [] as $root) {

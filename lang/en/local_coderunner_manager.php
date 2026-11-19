@@ -36,6 +36,7 @@ $string['headerprototype'] = 'Prototype';
 $string['headerscope'] = 'Scope';
 $string['headeractions'] = 'Actions';
 $string['headerchildren'] = 'Child prototypes';
+$string['headerchildrenscope'] = '(Site/Course)';
 $string['headerquestions'] = 'Questions';
 $string['headersummary'] = 'Summary';
 $string['headerversion'] = 'Version';

@@ -499,6 +499,47 @@ final class prototype_repository_test extends \advanced_testcase {
     }
 
     /**
+     * Asked for a course, the counts separate the children in it from the
+     * children anywhere.
+     *
+     * The library page showed the site-wide figure alone, so a prototype with
+     * children in other courses read as having them in the course being
+     * browsed -- reported from the test server on 16 November 2026. Both
+     * numbers now sit in the cell, which needs both to be countable at once.
+     */
+    public function test_usage_counts_separates_children_in_one_course(): void {
+        $course = $this->getDataGenerator()->create_course();
+        $elsewhere = $this->getDataGenerator()->create_course();
+
+        $parent = $this->repo->create('parent', SITEID, new override_set([], 'parent'));
+        $this->repo->create('here_a', (int) $course->id, new override_set([], 'here_a'), $parent->id);
+        $this->repo->create('here_b', (int) $course->id, new override_set([], 'here_b'), $parent->id);
+        $this->repo->create('there', (int) $elsewhere->id, new override_set([], 'there'), $parent->id);
+        $this->repo->create('atsite', SITEID, new override_set([], 'atsite'), $parent->id);
+
+        $counts = $this->repo->usage_counts([$parent->id], (int) $course->id);
+
+        $this->assertSame(4, $counts[$parent->id]['children']);
+        $this->assertSame(2, $counts[$parent->id]['childrenincourse']);
+    }
+
+    /**
+     * Without a course the per-course key is absent rather than zero.
+     *
+     * Zero would read as "no children in this course" when the truth is that
+     * no course was named, and the library page distinguishes the two.
+     */
+    public function test_usage_counts_omits_the_course_key_when_no_course_is_given(): void {
+        $parent = $this->repo->create('parent', SITEID, new override_set([], 'parent'));
+        $this->repo->create('child', SITEID, new override_set([], 'child'), $parent->id);
+
+        $counts = $this->repo->usage_counts([$parent->id]);
+
+        $this->assertSame(1, $counts[$parent->id]['children']);
+        $this->assertArrayNotHasKey('childrenincourse', $counts[$parent->id]);
+    }
+
+    /**
      * Every prototype asked about appears in the result, including those
      * nothing depends on, so a caller can index the result without checking.
      */
