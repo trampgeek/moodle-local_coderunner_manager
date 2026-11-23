@@ -47,6 +47,18 @@ defined('MOODLE_INTERNAL') || die();
  */
 class backup_local_coderunner_manager_plugin extends backup_local_plugin {
     /**
+     * @var int How far up a question's prototype chain the question point looks.
+     *
+     * The design warns an author when a chain would be deeper than about four
+     * levels and contemplates a hard limit of about twenty, so eight is
+     * generous for anything an author would build on purpose while keeping the
+     * generated query to a readable size -- one UNION term and two joins per
+     * level. A chain deeper than this loses its topmost layers on a cross-site
+     * restore, where they are absent from the target; on the same site they
+     * resolve by uuid as usual and nothing is lost.
+     */
+    const MAX_CHAIN_DEPTH = 8;
+    /**
      * The course's own prototypes, and the ancestors they need.
      *
      * Ancestors outside the course travel too, because a child is meaningless
@@ -57,6 +69,83 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
      * @return backup_plugin_element the plugin's element, or null if nothing to write.
      */
     protected function define_course_plugin_structure() {
+        $plugin = null;
+        [$prototype, $version] = $this->build_prototype_subtree($plugin);
+
+        // Computed here rather than queried, because "the course's prototypes
+        // and their ancestors" is a walk up a chain and not a WHERE clause.
+        // set_source_array() is evaluated once, which suits a point that runs
+        // once per backup; the versions below are per prototype and so can use
+        // an ordinary table source.
+        $prototype->set_source_array($this->prototypes_for_course(
+            (int) $this->task->get_courseid()
+        ));
+
+        $this->set_version_source($version);
+        $this->annotate_version_files($version);
+
+        return $plugin;
+    }
+
+    /**
+     * Prototypes a question needs that the course point did not write.
+     *
+     * **Why a second point is needed at all.** `course.xml` is written in the
+     * course task, before the activities annotate the question bank entries
+     * they use, and `questions.xml` is written by
+     * `backup_questions_structure_step` in the final task. So the course hook
+     * cannot know which questions are in the backup, and a prototype that only
+     * a question needs -- one borrowed from another course's bank -- has no
+     * other way out. A quiz-only backup (`TYPE_1ACTIVITY`) has no course task
+     * at all, so for that shape of backup **this is the only point there is**
+     * and every prototype the quiz's questions use comes through here.
+     *
+     * **Write-once, and it is the SQL that does it.** The source is evaluated
+     * once per question, and fifty questions on one prototype must not write
+     * it fifty times: a single `overrides` document can be 152 KB on the
+     * development site, so duplication is measured in hundreds of megabytes,
+     * not in tidiness. The filter is `NOT EXISTS` against `backup_ids_temp`,
+     * and `annotate_ids()` on the prototype's id is what puts a written
+     * prototype there -- `backup_structure_processor::process_final_element()`
+     * annotates as it writes, so the next question's query already sees it.
+     * The course point's own rows are in the same table under the same item
+     * name, so a course backup never repeats what `course.xml` already holds.
+     *
+     * **The chain is walked in SQL, to a bounded depth**, because this source
+     * cannot be a PHP array: `set_source_array()` is evaluated once at
+     * structure-definition time and so cannot vary by question. A recursive
+     * walk is not portable SQL either, so the query is a UNION of one term per
+     * level, generated below. {@see MAX_CHAIN_DEPTH} is what bounds it.
+     *
+     * @return backup_plugin_element the plugin's element.
+     */
+    protected function define_question_plugin_structure() {
+        $plugin = null;
+        [$prototype, $version] = $this->build_prototype_subtree($plugin);
+
+        $prototype->set_source_sql($this->chain_sql(), $this->chain_params());
+
+        // What makes the filter above true for every question after the first
+        // that needed this prototype.
+        $prototype->annotate_ids(\local_coderunner_manager\prototype_repository::BACKUP_ITEM, 'id');
+
+        $this->set_version_source($version);
+        $this->annotate_version_files($version);
+
+        return $plugin;
+    }
+
+    /**
+     * The prototype and version elements, built and wired to the plugin.
+     *
+     * Both connection points write the same shape, and the restore reads one
+     * set of paths for both, so the shape is described once. Only the
+     * prototype element's *source* differs between them.
+     *
+     * @param backup_plugin_element|null $plugin set to the plugin element.
+     * @return array the prototype element and the version element.
+     */
+    protected function build_prototype_subtree(&$plugin): array {
         $plugin = $this->get_plugin_element();
         $wrapper = new backup_nested_element($this->get_recommended_name());
         $plugin->add_child($wrapper);
@@ -90,19 +179,20 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
         $prototype->add_child($versions);
         $versions->add_child($version);
 
-        // Computed here rather than queried, because "the course's prototypes
-        // and their ancestors" is a walk up a chain and not a WHERE clause.
-        // set_source_array() is evaluated once, which suits a point that runs
-        // once per backup; the versions below are per prototype and so can use
-        // an ordinary table source.
-        $prototype->set_source_array($this->prototypes_for_course(
-            (int) $this->task->get_courseid()
-        ));
+        return [$prototype, $version];
+    }
 
-        // The whole history, oldest first, so a restore can rebuild the
-        // numbering as it found it rather than inventing one. A left join
-        // rather than set_source_table(), to carry the parent's identity; left,
-        // so that a root version -- whose parentid is null -- still backs up.
+    /**
+     * The whole version history of whichever prototype is being written.
+     *
+     * Oldest first, so a restore can rebuild the numbering as it found it
+     * rather than inventing one. A left join rather than set_source_table(),
+     * to carry the parent's identity; left, so that a root version -- whose
+     * parentid is null -- still backs up.
+     *
+     * @param backup_nested_element $version the version element.
+     */
+    protected function set_version_source(backup_nested_element $version): void {
         $version->set_source_sql(
             'SELECT v.id, v.version, v.parentid, v.overrides, v.summary,'
                 . ' v.documentation, v.documentationformat, v.commitmessage,'
@@ -115,32 +205,117 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
                 . ' ORDER BY v.version ASC',
             ['prototypeid' => backup::VAR_PARENTID]
         );
+    }
 
-        // Each version's support files, which is where a prototype's
-        // __pystylechecker.py and the like live. Annotated on the version
-        // rather than the prototype because the file area's itemid is the
-        // version id: a version is a complete record, files included.
-        //
-        // **An out-of-course ancestor's files do not travel.** The context a
-        // file annotation searches is fixed when the structure is defined
-        // (`backup_structure_processor::process_nested_element()` takes
-        // `VAR_CONTEXTID` for every row), and a prototype's files live in its
-        // own course's context, so one annotation cannot cover prototypes from
-        // two courses. The course's own prototypes are therefore complete, and
-        // an ancestor from elsewhere carries its rows but not its files -- which
-        // costs nothing in the cases that matter, because such an ancestor is
-        // matched by uuid on the target and keeps the files it already has. It
-        // is only a cross-*site* restore of a chain whose ancestor is absent
-        // there that lands a prototype without its files. The way to close
-        // that is to stop scoping prototype files by course, which is a
-        // migration and belongs with the phase 4 tidying, not here.
+    /**
+     * Annotate a version's support files.
+     *
+     * Each version's support files, which is where a prototype's
+     * __pystylechecker.py and the like live. Annotated on the version rather
+     * than the prototype because the file area's itemid is the version id: a
+     * version is a complete record, files included.
+     *
+     * **An out-of-course prototype's files do not travel.** The context a file
+     * annotation searches is fixed when the structure is defined
+     * (`backup_structure_processor::process_nested_element()` takes
+     * `VAR_CONTEXTID` for every row), and a prototype's files live in its own
+     * course's context, so one annotation cannot cover prototypes from two
+     * courses. The backed-up course's own prototypes are therefore complete,
+     * and one from elsewhere carries its rows but not its files -- which costs
+     * nothing in the cases that matter, because such a prototype is matched by
+     * uuid on the target and keeps the files it already has. It is only a
+     * cross-*site* restore of a chain reaching outside the course that lands a
+     * prototype without its files. The way to close that is to stop scoping
+     * prototype files by course, which is a migration and belongs with the
+     * phase 4 tidying, not here.
+     *
+     * @param backup_nested_element $version the version element.
+     */
+    protected function annotate_version_files(backup_nested_element $version): void {
         $version->annotate_files(
             \local_coderunner_manager\prototype_repository::COMPONENT,
             \local_coderunner_manager\prototype_repository::FILEAREA,
             'id'
         );
+    }
 
-        return $plugin;
+    /**
+     * The query that writes a question's prototype chain, root first.
+     *
+     * One UNION term per level of the chain, because a recursive walk is not
+     * portable SQL and this source has to vary by question so it cannot be a
+     * PHP array. Each level adds two joins: a prototype's parent is recorded
+     * on its *current version*, not on the prototype, so the walk goes
+     * prototype -> currentversionid -> parentid -> prototype.
+     *
+     * **Built-ins and Site defaults are excluded rather than stopped at.** The
+     * course point's PHP walk stops when it meets one; a UNION cannot stop, so
+     * the rows are filtered out instead. That is equivalent here, and slightly
+     * more robust: everything above a built-in is itself a built-in or Site
+     * defaults, since the installer creates those chains, so stopping and
+     * excluding select the same set. The reason either way is that every site
+     * installs its own and the restore re-links by uuid.
+     *
+     * Ordered by depth descending, so a root arrives before anything that
+     * derives from it: the restore resolves a parent from the mappings of
+     * prototypes already seen.
+     *
+     * @return string the SQL.
+     */
+    protected function chain_sql(): string {
+        $prototypes = '{' . \local_coderunner_manager\prototype_repository::PROTOTYPES . '}';
+        $versions = '{' . \local_coderunner_manager\prototype_repository::VERSIONS . '}';
+        $columns = 'p%1$d.id, p%1$d.name, p%1$d.courseid, p%1$d.uuid, p%1$d.builtin,'
+            . ' p%1$d.issitedefaults, p%1$d.currentversionid, p%1$d.draftversionid,'
+            . ' p%1$d.timecreated, p%1$d.timemodified, p%1$d.usercreated, p%1$d.usermodified';
+
+        $terms = [];
+        for ($depth = 0; $depth <= self::MAX_CHAIN_DEPTH; $depth++) {
+            // Level 0 is the prototype the question points at; each level after
+            // it climbs one link.
+            $joins = "JOIN $prototypes p0 ON p0.id = o.prototypeid";
+            for ($step = 1; $step <= $depth; $step++) {
+                $up = $step - 1;
+                $joins .= "\n              JOIN $versions v$up ON v$up.id = p$up.currentversionid"
+                    . "\n              JOIN $prototypes p$step ON p$step.id = v$up.parentid";
+            }
+
+            $terms[] = 'SELECT ' . sprintf($columns, $depth) . ", $depth AS chaindepth"
+                . "\n         FROM {question_coderunner_options} o"
+                . "\n              $joins"
+                . "\n        WHERE o.questionid = :questionid$depth"
+                . "\n          AND p$depth.builtin = 0"
+                . "\n          AND p$depth.issitedefaults = 0"
+                . "\n          AND NOT EXISTS (SELECT 1 FROM {backup_ids_temp} bi"
+                . "\n                           WHERE bi.backupid = :backupid$depth"
+                . "\n                             AND bi.itemname = :itemname$depth"
+                . "\n                             AND bi.itemid = p$depth.id)";
+        }
+
+        return "SELECT * FROM (\n" . implode("\n   UNION ALL\n", $terms)
+            . "\n) chain ORDER BY chaindepth DESC";
+    }
+
+    /**
+     * The parameters {@see chain_sql()} wants, one set per UNION term.
+     *
+     * A named parameter may not be reused in one statement portably, so each
+     * term carries its own copy under a numbered name. The question id and the
+     * backup id are resolved per occurrence by the structure processor;
+     * `sqlparam` is how a literal is passed instead of an element reference.
+     *
+     * @return array the parameters.
+     */
+    protected function chain_params(): array {
+        $params = [];
+        for ($depth = 0; $depth <= self::MAX_CHAIN_DEPTH; $depth++) {
+            $params["questionid$depth"] = backup::VAR_PARENTID;
+            $params["backupid$depth"] = backup::VAR_BACKUPID;
+            $params["itemname$depth"] = [
+                'sqlparam' => \local_coderunner_manager\prototype_repository::BACKUP_ITEM,
+            ];
+        }
+        return $params;
     }
 
     /**

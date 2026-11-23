@@ -241,7 +241,7 @@ final class backup_restore_test extends \advanced_testcase {
         $this->assertSame('contested (2)', $created->name);
         $this->assertNotSame($incumbent->uuid, $created->uuid, 'Two prototypes were conflated by their name.');
 
-        // **Recording a known limitation, not asserting desired behaviour.**
+        // Recording a known limitation here, not asserting desired behaviour.
         // The question is left pointing at the *incumbent* -- an unrelated
         // prototype that merely shares the name -- because the question type's
         // restorer resolved it by name in the root task, before this
@@ -260,6 +260,192 @@ final class backup_restore_test extends \advanced_testcase {
             (int) $incumbent->id,
             $this->resolved_prototype_id($restoredid),
             'The known limitation has changed; see the M5 note on name fallback.'
+        );
+    }
+
+    /**
+     * A prototype borrowed from another course travels with the question.
+     *
+     * The course point cannot carry it: `prototypes_for_course()` writes only
+     * the prototypes the course owns, plus their ancestors, and a borrowed
+     * prototype is neither. So this is the question connection point's own
+     * case, and nothing else can cover it.
+     */
+    public function test_a_borrowed_prototype_travels_with_the_question(): void {
+        global $DB;
+
+        $lender = $this->getDataGenerator()->create_course();
+        $borrowed = $this->repo->create(
+            'lent_out',
+            (int) $lender->id,
+            new override_set(['template' => 'LENT'], 'lent_out')
+        );
+        $this->add_support_file($borrowed, 'lent.py', 'print("lent")');
+        $questionid = $this->make_question($borrowed);
+
+        $backupid = $this->backup_course();
+
+        // Both courses and the prototype go, as they would be absent on
+        // another site.
+        delete_course($this->course, false);
+        delete_course($lender, false);
+        $DB->delete_records(prototype_repository::VERSIONS, ['prototypeid' => $borrowed->id]);
+        $DB->delete_records(prototype_repository::PROTOTYPES, ['id' => $borrowed->id]);
+
+        $newcourseid = $this->restore($backupid);
+
+        $created = $this->repo->find_one_by_uuid($borrowed->uuid, $newcourseid);
+        $this->assertNotNull($created, 'The borrowed prototype never left the lending course.');
+        $this->assertSame($newcourseid, (int) $created->courseid);
+
+        $restoredid = $this->restored_question_id($questionid, $newcourseid);
+        $this->assertSame(
+            (int) $created->id,
+            $this->resolved_prototype_id($restoredid),
+            'The question was not linked to the prototype that travelled with it.'
+        );
+        $this->assertSame('LENT', $this->resolved_template($restoredid));
+    }
+
+    /**
+     * A borrowed prototype's own ancestors travel too.
+     *
+     * The question point walks the chain in SQL, because its source has to
+     * vary by question and so cannot be a PHP array. A chain short by a layer
+     * would resolve from what is left of it and grade against settings the
+     * author never wrote, which is the kind of failure that does not announce
+     * itself.
+     */
+    public function test_a_borrowed_chain_travels_whole(): void {
+        global $DB;
+
+        $lender = $this->getDataGenerator()->create_course();
+        $root = $this->repo->create(
+            'lent_root',
+            (int) $lender->id,
+            new override_set(['template' => 'FROM LENT ROOT'], 'lent_root')
+        );
+        $leaf = $this->repo->create(
+            'lent_leaf',
+            (int) $lender->id,
+            new override_set([], 'lent_leaf'),
+            $root->id
+        );
+        $questionid = $this->make_question($leaf);
+
+        $backupid = $this->backup_course();
+
+        delete_course($this->course, false);
+        delete_course($lender, false);
+        foreach ([$leaf->id, $root->id] as $id) {
+            $DB->delete_records(prototype_repository::VERSIONS, ['prototypeid' => $id]);
+            $DB->delete_records(prototype_repository::PROTOTYPES, ['id' => $id]);
+        }
+
+        $newcourseid = $this->restore($backupid);
+
+        $newroot = $this->repo->find_one_by_uuid($root->uuid, $newcourseid);
+        $newleaf = $this->repo->find_one_by_uuid($leaf->uuid, $newcourseid);
+        $this->assertNotNull($newroot, 'The borrowed chain lost its root.');
+        $this->assertNotNull($newleaf, 'The borrowed chain lost its leaf.');
+        $this->assertSame(
+            (int) $newroot->id,
+            (int) $newleaf->currentversion->parentid,
+            'The restored leaf does not derive from the restored root.'
+        );
+
+        $restoredid = $this->restored_question_id($questionid, $newcourseid);
+        $this->assertSame('FROM LENT ROOT', $this->resolved_template($restoredid));
+    }
+
+    /**
+     * However many questions use a prototype, it is written once.
+     *
+     * Not tidiness: the source is evaluated once per question, and a single
+     * `overrides` document can be 152 KB on the development site, so writing
+     * it per question is measured in hundreds of megabytes. The write-once is
+     * the `NOT EXISTS` against `backup_ids_temp` that `annotate_ids()` feeds.
+     */
+    public function test_a_prototype_is_written_once_however_many_questions_use_it(): void {
+        $lender = $this->getDataGenerator()->create_course();
+        $borrowed = $this->repo->create(
+            'written_once',
+            (int) $lender->id,
+            new override_set(['template' => 'ONCE'], 'written_once')
+        );
+        for ($i = 0; $i < 3; $i++) {
+            $this->make_question($borrowed);
+        }
+
+        $xml = $this->questions_xml($this->backup_course());
+
+        $this->assertSame(
+            3,
+            substr_count($xml, '<qtype>coderunner</qtype>'),
+            'The fixture did not produce three CodeRunner questions to share the prototype.'
+        );
+        $this->assertSame(
+            1,
+            substr_count($xml, '<name>written_once</name>'),
+            'The prototype was written once per question instead of once per backup.'
+        );
+    }
+
+    /**
+     * A quiz-only backup carries the prototypes its questions need.
+     *
+     * The case the question point exists for most of all: `TYPE_1ACTIVITY` has
+     * no course task, so `define_course_plugin_structure()` never runs and the
+     * question point is the only source of prototype content there is.
+     */
+    public function test_a_quiz_only_backup_carries_its_prototypes(): void {
+        global $CFG, $DB, $USER;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+
+        $prototype = $this->make_prototype('quizzed', 'FROM QUIZ PROTOTYPE');
+        $questionid = $this->make_question($prototype);
+
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id]);
+        quiz_add_quiz_question($questionid, $quiz);
+
+        $bc = new \backup_controller(
+            \backup::TYPE_1ACTIVITY,
+            (int) $quiz->cmid,
+            \backup::FORMAT_MOODLE,
+            \backup::INTERACTIVE_NO,
+            \backup::MODE_IMPORT,
+            $USER->id
+        );
+        $backupid = $bc->get_backupid();
+        $bc->execute_plan();
+        $bc->destroy();
+
+        delete_course($this->course, false);
+        $DB->delete_records(prototype_repository::VERSIONS, ['prototypeid' => $prototype->id]);
+        $DB->delete_records(prototype_repository::PROTOTYPES, ['id' => $prototype->id]);
+
+        // A module backup restores into an existing course, adding to it.
+        $target = $this->getDataGenerator()->create_course();
+        $rc = new \restore_controller(
+            $backupid,
+            (int) $target->id,
+            \backup::INTERACTIVE_NO,
+            \backup::MODE_GENERAL,
+            $USER->id,
+            \backup::TARGET_CURRENT_ADDING
+        );
+        $this->assertTrue($rc->execute_precheck());
+        $rc->execute_plan();
+        $rc->destroy();
+
+        $created = $this->repo->find_one_by_uuid($prototype->uuid, (int) $target->id);
+        $this->assertNotNull($created, 'A quiz backup carried none of its prototypes.');
+
+        $restoredid = $this->restored_question_id($questionid, (int) $target->id);
+        $this->assertSame(
+            'FROM QUIZ PROTOTYPE',
+            $this->resolved_template($restoredid),
+            'The restored quiz question does not resolve through the prototype that travelled with it.'
         );
     }
 
@@ -382,6 +568,24 @@ final class backup_restore_test extends \advanced_testcase {
         $rc->destroy();
 
         return (int) $newcourseid;
+    }
+
+    /**
+     * The questions.xml of an unzipped backup.
+     *
+     * MODE_IMPORT leaves the backup as a directory rather than a zip, which is
+     * what lets a test read what was actually written.
+     *
+     * @param string $backupid the backup.
+     * @return string the file's contents.
+     */
+    private function questions_xml(string $backupid): string {
+        global $CFG;
+
+        $path = $CFG->tempdir . '/backup/' . $backupid . '/questions.xml';
+        $this->assertFileExists($path, 'The backup wrote no questions.xml.');
+
+        return (string) file_get_contents($path);
     }
 
     /**
