@@ -450,6 +450,45 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
+     * Duplicating a quiz reuses its questions instead of copying them.
+     *
+     * The regression test the duplication bug never had. Moodle matches a
+     * backed-up question against an existing one by a hash the question type
+     * supplies, and until a question type supplies one correctly, duplicating
+     * a single quiz copies the whole question bank behind it. CodeRunner lived
+     * through exactly that, and one surviving site now reports 560,000
+     * questions.
+     *
+     * The defect this guards against is in the question type's
+     * `define_excluded_identity_hash_fields()`, not in this plugin: anything
+     * present on one side of the comparison and not the other changes the hash,
+     * and the hash is a sorted multiset of *values*, so a single extra one is
+     * enough. Carrying the prototype's uuid in the backup re-armed it, which is
+     * what this test was written to catch.
+     */
+    public function test_duplicating_a_quiz_does_not_copy_its_questions(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+
+        $prototype = $this->make_prototype('duplicated', 'DUP');
+        $questionid = $this->make_question($prototype);
+
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id]);
+        quiz_add_quiz_question($questionid, $quiz);
+
+        $before = $DB->count_records('question', ['qtype' => 'coderunner']);
+
+        \core_courseformat\formatactions::cm((int) $this->course->id)->duplicate(cmid: (int) $quiz->cmid);
+
+        $this->assertSame(
+            $before,
+            $DB->count_records('question', ['qtype' => 'coderunner']),
+            'Duplicating the quiz copied its questions instead of reusing them, which is the bug '
+                . 'that grows a question bank exponentially.'
+        );
+    }
+
+    /**
      * A prototype in the course, with one version.
      *
      * @param string $name the prototype name.
