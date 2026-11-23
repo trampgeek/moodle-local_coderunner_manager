@@ -328,6 +328,74 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
      *
      * @return object the question.
      */
+    /**
+     * A batch is ended by its size in bytes, not only by its row count.
+     *
+     * write_batch() puts a whole batch into one UPDATE ... CASE statement, and
+     * each row carries its overrides document. Those vary by three orders of
+     * magnitude -- most are a few hundred bytes, the development site has one
+     * of 152 KB -- so a row count cannot bound the statement. Five hundred
+     * large ones is a statement no database accepts: MariaDB refused it with
+     * *Got a packet bigger than max_allowed_packet*, on a site whose restored
+     * course pushed an ordinary batch over the limit, and the migration then
+     * failed outright with nothing converted.
+     *
+     * What is asserted is that the migration **split into more than one
+     * statement**, rather than that it completed. Completion proves nothing
+     * here: the old code completes on any database whose max_allowed_packet
+     * happens to be generous, which the test database may well be, so a test
+     * that only migrated a lot of questions would have passed before the fix.
+     */
+    public function test_a_batch_is_ended_by_its_size_as_well_as_its_count(): void {
+        global $DB;
+
+        $this->make_prototype_question('big_overrides');
+        (new prototype_installer())->snapshot_user_prototypes();
+
+        // Far fewer rows than BATCH_SIZE, but between them more than
+        // BATCH_BYTES of overrides: a template of its own is an override, so
+        // each question carries that many bytes into the statement.
+        $wanted = 6;
+        for ($i = 0; $i < $wanted; $i++) {
+            $this->make_plain_question('big_overrides');
+        }
+        $this->assertLessThan(question_migrator::BATCH_SIZE, $wanted);
+
+        // The large value is written straight to the column rather than
+        // through the form, because the subject here is the migrator and the
+        // save path would get in the way: clean_question_form() nulls a
+        // question's inheritable fields unless it declares itself customised,
+        // which is CodeRunner 5's rule for "this field is the prototype's".
+        // Clearing the two CodeRunner 6 columns at the same time is what
+        // gives the migration something to do.
+        $DB->execute(
+            'UPDATE {question_coderunner_options}'
+                . ' SET prototypeid = NULL, overrides = NULL, template = ?'
+                . ' WHERE prototypetype = 0',
+            ["{{ STUDENT_ANSWER }}\n// " . str_repeat('x', 200000)]
+        );
+
+        $before = $DB->perf_get_writes();
+        $counts = (new question_migrator())->migrate();
+        $statements = $DB->perf_get_writes() - $before;
+
+        $this->assertGreaterThan(
+            1,
+            $statements,
+            'The migration wrote one statement, so a batch was bounded by its row count alone '
+                . 'and would exceed max_allowed_packet on a real site.'
+        );
+        $this->assertSame($wanted, $counts['converted']);
+        $this->assertSame(
+            0,
+            $DB->count_records_select(
+                'question_coderunner_options',
+                'prototypetype = 0 AND prototypeid IS NULL'
+            ),
+            'Splitting the batch lost a question.'
+        );
+    }
+
     private function make_question_with_prototype(): object {
         $this->make_prototype_question('migrate_me');
         (new prototype_installer())->snapshot_user_prototypes();

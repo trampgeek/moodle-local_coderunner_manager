@@ -47,6 +47,23 @@ class question_migrator {
     /** @var int How many rows to convert before writing a batch. */
     const BATCH_SIZE = 500;
 
+    /**
+     * The most a single batch's overrides documents may add up to, in bytes.
+     *
+     * A row count cannot bound the statement, because what each row carries
+     * varies by three orders of magnitude: most overrides documents are a few
+     * hundred bytes and the development site has one of 152 KB. Five hundred
+     * of the large ones is a statement no database will accept -- MariaDB
+     * refuses it with *Got a packet bigger than 'max_allowed_packet' bytes*,
+     * which is how this was found, on a site whose restored course pushed an
+     * ordinary batch over the limit.
+     *
+     * Half a megabyte is well under the 1 MB that is the smallest
+     * max_allowed_packet anyone is likely to be running, leaving room for the
+     * CASE skeleton and the parameter names around the values.
+     */
+    const BATCH_BYTES = 524288;
+
     /** @var array Prototype questions, keyed by name then context id. */
     private array $prototypesbyname = [];
 
@@ -124,14 +141,21 @@ class question_migrator {
           ORDER BY qco.id");
 
         $batch = [];
+        $bytes = 0;
         $done = 0;
         foreach ($rs as $row) {
-            $batch[] = $this->convert_row($row, $force);
+            $update = $this->convert_row($row, $force);
+            $batch[] = $update;
+            $bytes += strlen((string) $update->overrides);
             $done++;
 
-            if (count($batch) >= self::BATCH_SIZE) {
+            // Either limit ends the batch: the row count keeps the statement
+            // from growing unwieldy when the documents are small, and the byte
+            // count keeps it inside max_allowed_packet when they are not.
+            if (count($batch) >= self::BATCH_SIZE || $bytes >= self::BATCH_BYTES) {
                 $this->write_batch($batch);
                 $batch = [];
+                $bytes = 0;
                 if ($progress) {
                     $progress($done, $total);
                 }
