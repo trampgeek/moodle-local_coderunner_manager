@@ -26,6 +26,7 @@ namespace local_coderunner_manager;
 
 use core_question\local\bank\question_version_status;
 use qtype_coderunner\v6\legacy_converter;
+use qtype_coderunner\v6\question_cache;
 
 /**
  * Gives every CodeRunner question a prototype id and an overrides document.
@@ -80,6 +81,12 @@ class question_migrator {
     private array $counts = [];
 
     /**
+     * @var bool Whether this run uncaches the whole question cache at the end
+     * rather than each converted question as its batch is written.
+     */
+    private bool $bulkuncache = false;
+
+    /**
      * What the last run did.
      *
      * @return array counts keyed by outcome.
@@ -104,6 +111,7 @@ class question_migrator {
         global $DB;
 
         $this->counts = ['converted' => 0, 'broken' => 0, 'skipped' => 0, 'reasons' => []];
+        $this->bulkuncache = false;
         $this->build_indexes();
 
         // Two kinds of row are wanted. One has no overrides document and has
@@ -128,6 +136,20 @@ class question_migrator {
         if ($total === 0) {
             return $this->counts;
         }
+
+        // Converting a question changes what it resolves to, so its cached
+        // question data is now wrong -- and the case this matters in is
+        // exactly the one the sweep exists for: a course restored from a
+        // pre-6.0 backup, whose questions are first written unresolvable and
+        // only become resolvable when the course's prototypes have been
+        // snapshotted. A question loaded in between is cached broken, and
+        // stays broken until something clears it.
+        //
+        // The decision is made here rather than per batch, because a batch of
+        // 500 can tell nothing about whether the run as a whole is past the
+        // threshold, and a 410,000-question site would make 410,000 separate
+        // calls before the last batch could say so.
+        $this->bulkuncache = question_cache::too_many($total);
 
         $select = 'qco.prototypetype = 0' . ($force ? '' : " AND (qco.$pending)");
         $rs = $DB->get_recordset_sql("
@@ -169,6 +191,9 @@ class question_migrator {
         if ($progress) {
             $progress($done, $total);
         }
+        if ($this->bulkuncache) {
+            question_cache::purge();
+        }
 
         return $this->counts;
     }
@@ -205,6 +230,9 @@ class question_migrator {
 
         return (object) [
             'id' => $row->id,
+            // Not written; carried so that write_batch() can uncache the
+            // question whose resolution it has just changed.
+            'questionid' => (int) $row->questionid,
             'prototypeid' => $prototypeid,
             'overrides' => $overrides,
         ];
@@ -365,5 +393,13 @@ class question_migrator {
                 . " WHERE id $insql",
             $params
         );
+
+        // Written straight to the table, so nothing else has told core that
+        // these questions have changed. A long run uncaches as it goes rather
+        // than keeping every id to the end; a run too large for that purges
+        // once instead, after the last batch.
+        if (!$this->bulkuncache) {
+            question_cache::uncache(array_column($batch, 'questionid'));
+        }
     }
 }

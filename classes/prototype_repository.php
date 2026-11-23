@@ -26,6 +26,7 @@ namespace local_coderunner_manager;
 
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
+use qtype_coderunner\v6\question_cache;
 
 /**
  * All database access for prototypes and their versions.
@@ -243,7 +244,7 @@ class prototype_repository {
         // is therefore a version of its own in the history, before whatever
         // change the administrator came to make, which is what the history
         // should show.
-        $split = $this->save_new_version(
+        $split = $this->save_version_inside_transaction(
             $this->get_or_fail($builtin->id),
             $version ? $version->overrides : new \qtype_coderunner\v6\override_set([], $builtin->name),
             $stock->id,
@@ -253,6 +254,12 @@ class prototype_repository {
         );
 
         $transaction->allow_commit();
+
+        // The split re-parents the prototype, which changes what every question
+        // below it resolves to. Purged here rather than inside
+        // save_new_version(), so that it happens after this method's own
+        // commit and not in the middle of it.
+        $this->notify_dependent_questions($builtin->id);
 
         return $split;
     }
@@ -525,7 +532,11 @@ class prototype_repository {
         $published = $prototype->currentversion;
         $this->discard_draft_inside_transaction($prototype);
 
-        $saved = $this->save_new_version(
+        // Deliberately not save_new_version(): the published version is put
+        // back below, so nothing a question resolves has changed and there is
+        // nothing to uncache. Purging here would cost a widely used prototype
+        // a whole-cache purge on every keystroke-sized draft save.
+        $saved = $this->save_version_inside_transaction(
             $this->get_or_fail($prototype->id),
             $overrides,
             $parentid,
@@ -570,6 +581,11 @@ class prototype_repository {
             'draftversionid' => null,
             'timemodified' => time(),
         ]);
+
+        // This is the moment the draft becomes what questions resolve against,
+        // and so the moment their cached resolutions go stale. The draft saves
+        // that led up to it deliberately did not purge; this one must.
+        $this->notify_dependent_questions($prototype->id);
 
         return $this->get_or_fail($prototype->id);
     }
@@ -842,6 +858,56 @@ class prototype_repository {
         ?array $files = null,
         int $documentationformat = FORMAT_HTML
     ): prototype {
+        $saved = $this->save_version_inside_transaction(
+            $prototype,
+            $overrides,
+            $parentid,
+            $summary,
+            $documentation,
+            $commitmessage,
+            $files,
+            $documentationformat
+        );
+
+        // The new version is now what everything resolves against, so every
+        // question below is holding a resolution of the old one. Purged after
+        // the commit, so that a save that rolls back does not purge.
+        $this->notify_dependent_questions($prototype->id);
+
+        return $saved;
+    }
+
+    /**
+     * Write a new version, leaving its consequences to the caller.
+     *
+     * The body of {@see save_new_version()}, separated from the cache purge
+     * that normally follows it, for the two callers that must not purge: a
+     * draft save, which puts the published version back and so changes nothing
+     * any question resolves, and {@see split_builtin()}, which has a
+     * transaction of its own and purges once after committing it.
+     *
+     * @param prototype $prototype the prototype to add a version to.
+     * @param override_set $overrides the field values the new version sets.
+     * @param int|null $parentid the prototype it derives from, or null for a root.
+     * @param string $summary one sentence for the picker.
+     * @param string $documentation documentation for question authors.
+     * @param string $commitmessage an optional note describing the change.
+     * @param \stored_file[]|null $files the support files, or null to carry the
+     *      previous version's forward.
+     * @param int $documentationformat the documentation's format.
+     * @return prototype the prototype, with its new current version.
+     * @throws \moodle_exception if the parent would form a cycle or does not exist.
+     */
+    protected function save_version_inside_transaction(
+        prototype $prototype,
+        override_set $overrides,
+        ?int $parentid = null,
+        string $summary = '',
+        string $documentation = '',
+        string $commitmessage = '',
+        ?array $files = null,
+        int $documentationformat = FORMAT_HTML
+    ): prototype {
         global $DB, $USER;
 
         $transaction = $DB->start_delegated_transaction();
@@ -887,6 +953,50 @@ class prototype_repository {
     }
 
     /**
+     * Clear the cached question data of every question that resolves through a
+     * prototype, so that the next load sees the change.
+     *
+     * A question's prototype chain is resolved inside
+     * qtype_coderunner::get_question_options(), and core holds that method's
+     * result in the `core/questiondata` application cache (decision 15, which
+     * defers a resolved-settings cache precisely because this one already
+     * covers it). Every inherited field, every layer of template and UI
+     * parameters, and the support-file areas -- which are recorded as version
+     * ids -- are therefore frozen into that entry at the version the prototype
+     * had when it was written. Saving a new version changes none of them until
+     * the entry goes.
+     *
+     * Without this, a prototype fix simply does not reach the questions using
+     * it: the test server showed exactly that in November 2026, when a support
+     * file broken by a Python upgrade was corrected in the prototype and every
+     * dependent question went on failing until it was opened and saved again,
+     * one at a time. Re-saving a question is what purged its entry, which is
+     * why editing with no change appeared to fix it.
+     *
+     * Descendants are included because a question resolves through the whole
+     * chain. A change here reaches every question below, not only those naming
+     * this prototype directly.
+     *
+     * How the questions are uncached, and when there are too many of them to
+     * uncache one at a time, is {@see question_cache}'s business.
+     *
+     * Called by every operation that changes what a question resolves to.
+     * {@see delete()} is not one of them: it refuses while any question or
+     * child prototype depends on the prototype, so by the time it deletes
+     * there is nothing left to notify.
+     *
+     * @param int $prototypeid the prototype that changed.
+     */
+    public function notify_dependent_questions(int $prototypeid): void {
+        global $DB;
+
+        $ids = array_merge([$prototypeid], $this->descendant_ids($prototypeid));
+        [$insql, $params] = $DB->get_in_or_equal($ids, SQL_PARAMS_NAMED, 'p');
+
+        question_cache::uncache_matching("prototypeid $insql", $params);
+    }
+
+    /**
      * Rename a prototype.
      *
      * The name is the label authors see and what imports match on; nothing else
@@ -916,6 +1026,12 @@ class prototype_repository {
         ]);
 
         $transaction->allow_commit();
+
+        // No field value changes, but the name is each layer's label in the
+        // resolved chain, which is cached with the question and is what the
+        // authoring form names as the source of an inherited value. Without
+        // this, a renamed prototype goes on being credited under its old name.
+        $this->notify_dependent_questions($prototype->id);
 
         return $this->get_or_fail($prototype->id);
     }

@@ -42,6 +42,7 @@ require_once($CFG->dirroot . '/question/type/coderunner/db/upgradelib.php');
  */
 #[\PHPUnit\Framework\Attributes\CoversClass(question_migrator::class)]
 #[\PHPUnit\Framework\Attributes\CoversClass(legacy_converter::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\qtype_coderunner\v6\question_cache::class)]
 #[\PHPUnit\Framework\Attributes\Group('local_coderunner_manager')]
 final class question_migrator_test extends \qtype_coderunner_testcase {
     /** @var int|null The context of a question bank in this test's own course. */
@@ -304,6 +305,36 @@ final class question_migrator_test extends \qtype_coderunner_testcase {
         $counts = (new question_migrator())->migrate();
         $this->assertSame(0, $counts['converted']);
         $this->assertSame(0, $counts['broken']);
+    }
+
+    /**
+     * The sweep clears the cached question data of the questions it converts.
+     *
+     * The sweep writes prototypeid and overrides straight to the options table
+     * in one bulk UPDATE, so nothing else tells core those questions have
+     * changed. That matters in exactly the case the sweep exists for: a course
+     * restored from a pre-6.0 backup, whose questions are unresolvable until
+     * the course's prototypes have been snapshotted. A question loaded in that
+     * window is cached broken, and would stay broken however often the sweep
+     * ran.
+     */
+    public function test_the_sweep_uncaches_the_questions_it_converts(): void {
+        $question = $this->make_question_with_prototype();
+        $this->unmigrate($question);
+        \question_bank::notify_question_edited($question->id);
+
+        // Loading it here is what writes the broken state into the cache.
+        $this->assertNull(
+            \question_bank::load_question_data($question->id)->options->prototypeid,
+            'An unmigrated question should be unresolvable.'
+        );
+
+        (new question_migrator())->migrate();
+
+        $this->assertNotNull(
+            \question_bank::load_question_data($question->id)->options->prototypeid,
+            'The sweep resolved the question in the database but left the cache saying it was broken.'
+        );
     }
 
     /**
