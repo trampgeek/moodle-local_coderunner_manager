@@ -46,9 +46,6 @@ defined('MOODLE_INTERNAL') || die();
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class backup_local_coderunner_manager_plugin extends backup_local_plugin {
-    /** The item name each written prototype is recorded under, for write-once. */
-    const BACKUP_ITEM = 'local_coderunner_manager_prototype';
-
     /**
      * The course's own prototypes, and the ancestors they need.
      *
@@ -76,6 +73,16 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
             'version', 'parentid', 'overrides', 'summary',
             'documentation', 'documentationformat', 'commitmessage',
             'timecreated', 'usermodified',
+            // The parent's identity, beside its local id, for the same reason
+            // the question element carries the prototype's: an id is this
+            // site's and Moodle does not remap it. The uuid settles a parent
+            // that is not in the backup because it is a built-in, since a
+            // built-in's uuid is derived from its canonical name (decision 23)
+            // and so is the same on every site. Site defaults needs the flag
+            // instead: it is created by the installer with a *random* uuid, so
+            // the target's own copy carries a different one and only "this is
+            // the Site defaults prototype" crosses a site boundary.
+            'parentuuid', 'parentissitedefaults',
         ]);
 
         $wrapper->add_child($prototypes);
@@ -93,11 +100,44 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
         ));
 
         // The whole history, oldest first, so a restore can rebuild the
-        // numbering as it found it rather than inventing one.
-        $version->set_source_table(
-            \local_coderunner_manager\prototype_repository::VERSIONS,
-            ['prototypeid' => backup::VAR_PARENTID],
-            'version ASC'
+        // numbering as it found it rather than inventing one. A left join
+        // rather than set_source_table(), to carry the parent's identity; left,
+        // so that a root version -- whose parentid is null -- still backs up.
+        $version->set_source_sql(
+            'SELECT v.id, v.version, v.parentid, v.overrides, v.summary,'
+                . ' v.documentation, v.documentationformat, v.commitmessage,'
+                . ' v.timecreated, v.usermodified,'
+                . ' p.uuid AS parentuuid, p.issitedefaults AS parentissitedefaults'
+                . ' FROM {' . \local_coderunner_manager\prototype_repository::VERSIONS . '} v'
+                . ' LEFT JOIN {' . \local_coderunner_manager\prototype_repository::PROTOTYPES . '} p'
+                . ' ON p.id = v.parentid'
+                . ' WHERE v.prototypeid = :prototypeid'
+                . ' ORDER BY v.version ASC',
+            ['prototypeid' => backup::VAR_PARENTID]
+        );
+
+        // Each version's support files, which is where a prototype's
+        // __pystylechecker.py and the like live. Annotated on the version
+        // rather than the prototype because the file area's itemid is the
+        // version id: a version is a complete record, files included.
+        //
+        // **An out-of-course ancestor's files do not travel.** The context a
+        // file annotation searches is fixed when the structure is defined
+        // (`backup_structure_processor::process_nested_element()` takes
+        // `VAR_CONTEXTID` for every row), and a prototype's files live in its
+        // own course's context, so one annotation cannot cover prototypes from
+        // two courses. The course's own prototypes are therefore complete, and
+        // an ancestor from elsewhere carries its rows but not its files -- which
+        // costs nothing in the cases that matter, because such an ancestor is
+        // matched by uuid on the target and keeps the files it already has. It
+        // is only a cross-*site* restore of a chain whose ancestor is absent
+        // there that lands a prototype without its files. The way to close
+        // that is to stop scoping prototype files by course, which is a
+        // migration and belongs with the phase 4 tidying, not here.
+        $version->annotate_files(
+            \local_coderunner_manager\prototype_repository::COMPONENT,
+            \local_coderunner_manager\prototype_repository::FILEAREA,
+            'id'
         );
 
         return $plugin;
@@ -148,7 +188,7 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
                 $ordered[] = $rows[$id];
                 backup_structure_dbops::insert_backup_ids_record(
                     $this->task->get_backupid(),
-                    self::BACKUP_ITEM,
+                    \local_coderunner_manager\prototype_repository::BACKUP_ITEM,
                     $id
                 );
             }

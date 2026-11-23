@@ -50,6 +50,19 @@ class prototype_repository {
     const FILEAREA = 'prototypefile';
 
     /**
+     * @var string The backup_ids_temp item name a prototype is recorded under.
+     *
+     * Shared by the manager's backup and restore plugins and by the question
+     * type's restorer, which needs the same mapping to recode an attempt's
+     * recorded chain. `restore_plugin::set_mapping()` does not namespace the
+     * item name and `backup_ids_temp` is keyed by the restore id, which every
+     * plugin in one restore shares, so the lookup works across plugins --
+     * provided both spell it the same, which is why it is a constant here
+     * rather than a literal in each of the three.
+     */
+    const BACKUP_ITEM = 'local_coderunner_manager_prototype';
+
+    /**
      * Load one prototype, with its current version.
      *
      * @param int $id the prototype id.
@@ -133,6 +146,44 @@ class prototype_repository {
         global $DB;
 
         return $this->prototypes_from_records($DB->get_records(self::PROTOTYPES, ['uuid' => $uuid]));
+    }
+
+    /**
+     * The one prototype a restore should reuse for a given uuid, if any.
+     *
+     * A uuid is deliberately not unique on a site: a restore that cannot reuse
+     * the original creates a copy carrying the same identifier, and a site that
+     * has done that before holds several. So "find it by uuid" needs a
+     * tie-break, and the one used here is scope, because scope is what decides
+     * which prototype a question can see: the asking course's own first, then
+     * the site's, then the oldest of whatever is left so that two restores of
+     * the same backup make the same choice.
+     *
+     * @param string $uuid the uuid to match.
+     * @param int $courseid the course the restore is going into.
+     * @return prototype|null the prototype to reuse, or null if the site has
+     *      none with that uuid.
+     */
+    public function find_one_by_uuid(string $uuid, int $courseid): ?prototype {
+        if ($uuid === '') {
+            return null;
+        }
+
+        $matches = $this->find_by_uuid($uuid);
+        if (!$matches) {
+            return null;
+        }
+
+        foreach ([$courseid, SITEID] as $scope) {
+            foreach ($matches as $candidate) {
+                if ((int) $candidate->courseid === (int) $scope) {
+                    return $candidate;
+                }
+            }
+        }
+
+        // Keyed by id, so the first is the lowest.
+        return reset($matches);
     }
 
     /**
@@ -326,11 +377,31 @@ class prototype_repository {
     }
 
     protected function stock_name(string $name, int $courseid): string {
-        $candidate = get_string('stockname', 'local_coderunner_manager', $name);
+        return $this->free_name(get_string('stockname', 'local_coderunner_manager', $name), $courseid);
+    }
+
+    /**
+     * The given name, or the nearest one to it that is free in this scope.
+     *
+     * Two callers need a name that {@see name_clash()} will accept rather than
+     * a refusal: splitting a built-in, which invents the stock copy's name
+     * itself, and restoring a course, where the name comes from another site
+     * and may well collide with a site prototype here -- `python3` being the
+     * likeliest collision of all. Failing a restore that is otherwise fine is
+     * worse than landing the prototype under a name an author can change, and
+     * the uuid still records what it is.
+     *
+     * @param string $name the name wanted.
+     * @param int $courseid the scope it has to be free in.
+     * @param int $excludeid a prototype to ignore, when checking a rename.
+     * @return string the name, suffixed if it had to be.
+     */
+    public function free_name(string $name, int $courseid, int $excludeid = 0): string {
+        $candidate = $name;
         $suffix = 1;
-        while ($this->name_clash($candidate, $courseid) !== null) {
+        while ($this->name_clash($candidate, $courseid, $excludeid) !== null) {
             $suffix++;
-            $candidate = get_string('stockname', 'local_coderunner_manager', $name) . " ($suffix)";
+            $candidate = $name . " ($suffix)";
         }
         return $candidate;
     }
@@ -827,6 +898,116 @@ class prototype_repository {
         $transaction->allow_commit();
 
         return $this->get_or_fail($record->id);
+    }
+
+    /**
+     * Write a prototype exactly as a backup describes it, history and all.
+     *
+     * A restore reproduces data; it does not replay the API. So this writes the
+     * rows rather than calling {@see create()} and {@see save_new_version()}
+     * once per version, for three reasons. The version *numbers* are preserved
+     * as backed up, where replaying would renumber from one and a history whose
+     * numbers moved is not the history the author wrote. Each version's
+     * `overrides` is kept as the exact stored JSON, where re-encoding an
+     * override_set could normalise it and so change what the question resolves
+     * to. And the whole history lands in one transaction, where replaying would
+     * leave a partly built prototype visible if it failed halfway.
+     *
+     * It is still in the repository rather than in the restore plugin, because
+     * the invariants live here: the name is put through {@see free_name()}, and
+     * every write to the two tables goes through this class.
+     *
+     * **The built-in and Site defaults flags are forced off** rather than taken
+     * from the backup. The backup never writes either -- `collect_with_ancestors()`
+     * stops at both, because every site installs its own and the restore
+     * re-links by uuid -- so anything arriving here is neither, and a
+     * hand-edited backup must not be able to create a second Site defaults or
+     * a prototype the installer will overwrite.
+     *
+     * **A version's parent must already be resolved to a local id.** Resolving
+     * it needs the restore's own mappings and a uuid lookup, which are the
+     * restore plugin's business, not this class's.
+     *
+     * @param \stdClass $record the prototype's identity: name, uuid, and the
+     *      created and modified stamps and users.
+     * @param array $versions the version rows, oldest first. Each needs
+     *      `version` and `overrides`, and may carry `parentid` (a local id or
+     *      null), `summary`, `documentation`, `documentationformat`,
+     *      `commitmessage`, `timecreated` and `usermodified`.
+     * @param int $courseid the course the prototype is restored into.
+     * @param int|null $currentversion the version *number* that is current.
+     *      Null, or a number no version carries, falls back to the last.
+     * @param int|null $draftversion the version number that is the unpublished
+     *      draft, if the backup had one.
+     * @return prototype the restored prototype, at its current version.
+     * @throws \coding_exception if no versions are given.
+     */
+    public function restore_prototype(
+        \stdClass $record,
+        array $versions,
+        int $courseid,
+        ?int $currentversion = null,
+        ?int $draftversion = null
+    ): prototype {
+        global $DB, $USER;
+
+        if (!$versions) {
+            throw new \coding_exception("Prototype '{$record->name}' was backed up with no versions.");
+        }
+
+        $transaction = $DB->start_delegated_transaction();
+
+        $now = time();
+        $id = $DB->insert_record(self::PROTOTYPES, (object) [
+            'name' => $this->free_name((string) $record->name, $courseid),
+            'courseid' => $courseid,
+            'uuid' => (string) ($record->uuid ?: \core\uuid::generate()),
+            'builtin' => 0,
+            'issitedefaults' => 0,
+            'currentversionid' => null,
+            'draftversionid' => null,
+            'timecreated' => (int) ($record->timecreated ?? $now),
+            'timemodified' => (int) ($record->timemodified ?? $now),
+            'usercreated' => (int) ($record->usercreated ?? $USER->id),
+            'usermodified' => (int) ($record->usermodified ?? $USER->id),
+        ]);
+
+        // Keyed by version number, which is what the current and draft are
+        // named by: the backup's version *ids* are another site's and are not
+        // carried past this point.
+        $newids = [];
+        foreach ($versions as $version) {
+            $version = (object) $version;
+            $number = (int) $version->version;
+            $newids[$number] = $DB->insert_record(self::VERSIONS, (object) [
+                'prototypeid' => $id,
+                'version' => $number,
+                'parentid' => isset($version->parentid) && $version->parentid !== null
+                    ? (int) $version->parentid
+                    : null,
+                'overrides' => (string) ($version->overrides ?? '{}'),
+                'summary' => (string) ($version->summary ?? ''),
+                'documentation' => (string) ($version->documentation ?? ''),
+                'documentationformat' => (int) ($version->documentationformat ?? FORMAT_HTML),
+                'commitmessage' => (string) ($version->commitmessage ?? ''),
+                'timecreated' => (int) ($version->timecreated ?? $now),
+                'usermodified' => (int) ($version->usermodified ?? $USER->id),
+            ]);
+        }
+
+        // A prototype with no current version resolves to nothing, so the
+        // fallback is the newest rather than null: a backup that lost track of
+        // which version was current is still better restored at its last one.
+        $currentid = $newids[$currentversion] ?? $newids[max(array_keys($newids))];
+        $DB->update_record(self::PROTOTYPES, (object) [
+            'id' => $id,
+            'currentversionid' => $currentid,
+            'draftversionid' => $draftversion !== null ? ($newids[$draftversion] ?? null) : null,
+        ]);
+
+        $transaction->allow_commit();
+
+        return $this->get_or_fail($id);
     }
 
     /**
