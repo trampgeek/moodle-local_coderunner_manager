@@ -403,6 +403,7 @@ final class backup_restore_test extends \advanced_testcase {
         require_once($CFG->dirroot . '/mod/quiz/locallib.php');
 
         $prototype = $this->make_prototype('quizzed', 'FROM QUIZ PROTOTYPE');
+        $this->add_support_file($prototype, 'quizhelper.py', 'print("quiz")');
         $questionid = $this->make_question($prototype);
 
         $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id]);
@@ -440,6 +441,11 @@ final class backup_restore_test extends \advanced_testcase {
 
         $created = $this->repo->find_one_by_uuid($prototype->uuid, (int) $target->id);
         $this->assertNotNull($created, 'A quiz backup carried none of its prototypes.');
+        $this->assertArrayHasKey(
+            'quizhelper.py',
+            $this->repo->version_files($created, (int) $created->currentversion->id),
+            'The prototype arrived without its support files, so its questions cannot run.'
+        );
 
         $restoredid = $this->restored_question_id($questionid, (int) $target->id);
         $this->assertSame(
@@ -580,8 +586,10 @@ final class backup_restore_test extends \advanced_testcase {
      * question was in this course's bank and only its prototype was elsewhere,
      * here the *question* belongs to the other course too.
      *
-     * One known limitation falls out of this shape and is pinned below rather
-     * than omitted: the borrowed prototype's support files do not travel.
+     * This shape is also what found the file annotation fault: a prototype
+     * from another course arrived with its rows and none of its support files,
+     * because one annotation records one context and a prototype's files live
+     * in its own course's.
      */
     public function test_a_quiz_borrowing_another_courses_bank_keeps_its_prototypes(): void {
         global $CFG, $DB;
@@ -629,21 +637,14 @@ final class backup_restore_test extends \advanced_testcase {
         );
         $this->assertSame('FROM THE LENDER', $this->resolved_template($restoredid));
 
-        // The documented limitation, pinned rather than left out so that
-        // closing it is noticed. A file annotation's context is fixed when the
-        // backup structure is defined, and a prototype's files live in its own
-        // course's context, so one annotation cannot cover prototypes from two
-        // courses: an out-of-course prototype carries its rows but not its
-        // files. It costs nothing on the same site, where the prototype is
-        // matched by uuid and keeps the files it has; only this cross-site
-        // shape lands one without them. Closing it means not scoping prototype
-        // files by course, which is a migration and belongs to phase 4 -- and
-        // when it is closed, this assertion is the one to flip.
-        $this->assertArrayNotHasKey(
+        // The files travel too, which they did not until the annotation's
+        // context was made to follow the row it is written from. A prototype
+        // whose __pystylechecker.py stayed behind imports and then fails every
+        // question under it.
+        $this->assertArrayHasKey(
             'shared.py',
             $this->repo->version_files($created, (int) $created->currentversion->id),
-            "An out-of-course prototype's files now travel, so phase 4's file scoping has "
-                . 'landed and this expectation is out of date.'
+            "The borrowed prototype arrived without the support file its questions need."
         );
     }
 

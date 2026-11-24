@@ -82,7 +82,6 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
         ));
 
         $this->set_version_source($version);
-        $this->annotate_version_files($version);
 
         return $plugin;
     }
@@ -130,7 +129,6 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
         $prototype->annotate_ids(\local_coderunner_manager\prototype_repository::BACKUP_ITEM, 'id');
 
         $this->set_version_source($version);
-        $this->annotate_version_files($version);
 
         return $plugin;
     }
@@ -157,8 +155,16 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
             'timecreated', 'timemodified', 'usercreated', 'usermodified',
         ]);
 
+        // Required here rather than at the top of the file: a *restore* loads
+        // this class too, and at that point the backup includes are absent, so
+        // a class extending backup_nested_element cannot be defined. This
+        // method runs only in a backup.
+        require_once(__DIR__ . '/backup_prototype_version_element.class.php');
+
         $versions = new backup_nested_element('versions');
-        $version = new backup_nested_element('version', ['id'], [
+        // The subclass is what carries each version's support files; see its
+        // own file for why they cannot be annotated in the ordinary way.
+        $version = new backup_prototype_version_element('version', ['id'], [
             'version', 'parentid', 'overrides', 'summary',
             'documentation', 'documentationformat', 'commitmessage',
             'timecreated', 'usermodified',
@@ -172,6 +178,10 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
             // the target's own copy carries a different one and only "this is
             // the Site defaults prototype" crosses a site boundary.
             'parentuuid', 'parentissitedefaults',
+            // The support files, base64 in this element rather than annotated
+            // in the ordinary way; see backup_prototype_version_element for
+            // why the ordinary way cannot reach them.
+            'inlinefiles',
         ]);
 
         $wrapper->add_child($prototypes);
@@ -197,45 +207,18 @@ class backup_local_coderunner_manager_plugin extends backup_local_plugin {
             'SELECT v.id, v.version, v.parentid, v.overrides, v.summary,'
                 . ' v.documentation, v.documentationformat, v.commitmessage,'
                 . ' v.timecreated, v.usermodified,'
-                . ' p.uuid AS parentuuid, p.issitedefaults AS parentissitedefaults'
+                . ' p.uuid AS parentuuid, p.issitedefaults AS parentissitedefaults,'
+                . ' ownctx.id AS filecontextid'
                 . ' FROM {' . \local_coderunner_manager\prototype_repository::VERSIONS . '} v'
+                . ' JOIN {' . \local_coderunner_manager\prototype_repository::PROTOTYPES . '} own'
+                . ' ON own.id = v.prototypeid'
+                . ' JOIN {context} ownctx'
+                . ' ON ownctx.instanceid = own.courseid AND ownctx.contextlevel = ' . CONTEXT_COURSE
                 . ' LEFT JOIN {' . \local_coderunner_manager\prototype_repository::PROTOTYPES . '} p'
                 . ' ON p.id = v.parentid'
                 . ' WHERE v.prototypeid = :prototypeid'
                 . ' ORDER BY v.version ASC',
             ['prototypeid' => backup::VAR_PARENTID]
-        );
-    }
-
-    /**
-     * Annotate a version's support files.
-     *
-     * Each version's support files, which is where a prototype's
-     * __pystylechecker.py and the like live. Annotated on the version rather
-     * than the prototype because the file area's itemid is the version id: a
-     * version is a complete record, files included.
-     *
-     * **An out-of-course prototype's files do not travel.** The context a file
-     * annotation searches is fixed when the structure is defined
-     * (`backup_structure_processor::process_nested_element()` takes
-     * `VAR_CONTEXTID` for every row), and a prototype's files live in its own
-     * course's context, so one annotation cannot cover prototypes from two
-     * courses. The backed-up course's own prototypes are therefore complete,
-     * and one from elsewhere carries its rows but not its files -- which costs
-     * nothing in the cases that matter, because such a prototype is matched by
-     * uuid on the target and keeps the files it already has. It is only a
-     * cross-*site* restore of a chain reaching outside the course that lands a
-     * prototype without its files. The way to close that is to stop scoping
-     * prototype files by course, which is a migration and belongs with the
-     * phase 4 tidying, not here.
-     *
-     * @param backup_nested_element $version the version element.
-     */
-    protected function annotate_version_files(backup_nested_element $version): void {
-        $version->annotate_files(
-            \local_coderunner_manager\prototype_repository::COMPONENT,
-            \local_coderunner_manager\prototype_repository::FILEAREA,
-            'id'
         );
     }
 

@@ -24,6 +24,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+use local_coderunner_manager\prototype;
 use local_coderunner_manager\prototype_repository;
 use qtype_coderunner\v6\question_cache;
 
@@ -351,7 +352,133 @@ class restore_local_coderunner_manager_plugin extends restore_local_plugin {
             $number = (int) $version['version'];
             if (isset($history[$number])) {
                 $this->set_mapping(self::VERSION_ITEM, (int) $version['id'], $history[$number]->id, true);
+                $this->write_inline_files($version, $new, $history[$number]->id, $repo);
+                $this->claim_out_of_course_files($version, $new, $repo);
             }
+        }
+    }
+
+    /**
+     * Ask for a version's files when they were written from another context.
+     *
+     * `add_related_files()` looks for a file under the context the backup was
+     * taken from, which is the backed-up course's, and maps it to the new
+     * context through the restore's own context mappings. Neither step suits a
+     * prototype from *another* course: its files are in `files.xml` under a
+     * context nothing asks about, and that context has no mapping here, so
+     * asking for it raises `unknown_context_mapping`. A prototype without its
+     * `__pystylechecker.py` fails every question under it, so leaving them is
+     * not an option.
+     *
+     * `restore_dbops::send_files_to_pool()` takes both halves explicitly: the
+     * old context to look under, and a forced new context to put them in --
+     * the escape hatch core added for questions, which "can end belonging to
+     * non-standard context mappings". The new context is where the restored
+     * prototype's files belong, which the repository decides.
+     *
+     * Only for a context that differs from the one the task will ask about;
+     * the blanket calls in `after_execute_course()` and
+     * `after_execute_question()` cover the rest, and are also what a backup
+     * taken before the context was recorded still travels by.
+     * `send_files_to_pool()` creates a file only when it is not already there,
+     * so the overlap costs nothing.
+     *
+     * @param array $version the backed-up version row, already mapped.
+     * @param prototype $new the prototype just created.
+     * @param prototype_repository $repo the repository, for the file context.
+     */
+    protected function claim_out_of_course_files(
+        array $version,
+        prototype $new,
+        prototype_repository $repo
+    ): void {
+        $filecontextid = (int) ($version['filecontextid'] ?? 0);
+        if ($filecontextid === 0 || $filecontextid === (int) $this->task->get_old_contextid()) {
+            return;
+        }
+
+        \restore_dbops::send_files_to_pool(
+            $this->task->get_basepath(),
+            $this->task->get_restoreid(),
+            prototype_repository::COMPONENT,
+            prototype_repository::FILEAREA,
+            $filecontextid,
+            $this->task->get_userid(),
+            self::VERSION_ITEM,
+            (int) $version['id'],
+            $repo->file_contextid($new)
+        );
+    }
+
+    /**
+     * Write back the support files a version carried in its own XML.
+     *
+     * The backup carries them base64 in an `inlinefiles` element rather than
+     * through Moodle's file annotation, because a prototype written at the
+     * question attachment point is written by the final task, which has no
+     * inforef, and `restore_load_included_files` loads a file only for a ref
+     * it has read or for a component of core's own short list. Before that, a
+     * quiz-only backup restored its prototypes without the support files their
+     * questions need. {@see backup_prototype_version_element} has the whole
+     * reasoning.
+     *
+     * The files land in the restored prototype's own context and under its own
+     * new version id, which is what the repository would have written. Nothing
+     * is overwritten: a prototype reused by uuid never reaches this method, and
+     * one just created has no files yet.
+     *
+     * A backup made before this element existed carries nothing here and takes
+     * the old route, which is what the `add_related_files()` calls in
+     * `after_execute_course()` and `after_execute_question()` remain for.
+     *
+     * @param array $version the backed-up version row.
+     * @param prototype $new the prototype just created.
+     * @param int $versionid the new version's id, which owns the files.
+     * @param prototype_repository $repo the repository, for the file context.
+     */
+    protected function write_inline_files(
+        array $version,
+        prototype $new,
+        int $versionid,
+        prototype_repository $repo
+    ): void {
+        $encoded = (string) ($version['inlinefiles'] ?? '');
+        if ($encoded === '') {
+            return;
+        }
+
+        $files = json_decode($encoded, true);
+        if (!is_array($files)) {
+            $this->log('A prototype version carried unreadable support files', backup::LOG_WARNING);
+            return;
+        }
+
+        $fs = get_file_storage();
+        $contextid = $repo->file_contextid($new);
+        foreach ($files as $file) {
+            $filename = (string) ($file['filename'] ?? '');
+            if ($filename === '') {
+                continue;
+            }
+            $filepath = (string) ($file['filepath'] ?? '/');
+            if ($fs->file_exists(
+                $contextid,
+                prototype_repository::COMPONENT,
+                prototype_repository::FILEAREA,
+                $versionid,
+                $filepath,
+                $filename
+            )) {
+                continue;
+            }
+            $fs->create_file_from_string([
+                'contextid' => $contextid,
+                'component' => prototype_repository::COMPONENT,
+                'filearea' => prototype_repository::FILEAREA,
+                'itemid' => $versionid,
+                'filepath' => $filepath,
+                'filename' => $filename,
+            ], base64_decode((string) ($file['content'] ?? '')));
         }
     }
 
