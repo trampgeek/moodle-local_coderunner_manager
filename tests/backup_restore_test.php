@@ -489,6 +489,165 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
+     * A course copy reuses the prototype rather than copying it.
+     *
+     * Moodle's *Copy course* is a backup and restore in MODE_COPY, run by an
+     * adhoc task; here both halves run in line. The copy gets a bank of its
+     * own, so its questions are new by design -- what must not be new is the
+     * prototype, which is on this site already and matches by uuid.
+     */
+    public function test_a_course_copy_reuses_the_prototype(): void {
+        global $DB;
+
+        $prototype = $this->make_prototype('copied', 'COPIED');
+        $questionid = $this->make_question($prototype);
+
+        $newcourseid = $this->copy_course();
+
+        $this->assertSame(
+            1,
+            $DB->count_records(prototype_repository::PROTOTYPES, ['uuid' => $prototype->uuid]),
+            'The copy made a second prototype of the same identity.'
+        );
+
+        $copiedid = $this->restored_question_id($questionid, $newcourseid);
+        $this->assertSame(
+            (int) $prototype->id,
+            $this->resolved_prototype_id($copiedid),
+            "The copied question is not using the original course's prototype."
+        );
+        $this->assertSame('COPIED', $this->resolved_template($copiedid));
+    }
+
+    /**
+     * Importing a course into an existing one brings working questions.
+     *
+     * *Import course data* restores with TARGET_CURRENT_ADDING into a course
+     * that already exists. The question is new by design and that is not a
+     * fault: an import recreates the backup's question *bank module* in the
+     * target, so the incoming question lands in a category of its own, and
+     * core matches an incoming question against an existing one only within
+     * one category. Measured rather than assumed -- two imports leave two
+     * qbank modules, each with its own copy -- so what is asserted here is
+     * what the import does promise: the prototype is reused, and the imported
+     * question resolves through it. The duplication the identity hash guards
+     * is quiz duplication, which has its own test below.
+     *
+     * The work on this path is the *question type's* restorer rather than the
+     * manager's course point: an import is same-site, so `resolve_prototype()`
+     * trusts the backed-up id once the uuid agrees, and the question is
+     * pointing at the original before any prototype is restored. Checked by
+     * neutering that method, which fails this test; neutering the manager's
+     * uuid reuse does not.
+     */
+    public function test_a_course_import_reuses_the_prototype(): void {
+        global $DB;
+
+        $prototype = $this->make_prototype('imported', 'IMPORTED');
+        $questionid = $this->make_question($prototype);
+
+        $target = (int) $this->getDataGenerator()->create_course()->id;
+        $this->restore_into($this->backup_course(), $target, \backup::TARGET_CURRENT_ADDING);
+
+        $this->assertSame(
+            1,
+            $DB->count_records(prototype_repository::PROTOTYPES, ['uuid' => $prototype->uuid]),
+            'The import made a second prototype of the same identity.'
+        );
+
+        $importedid = $this->restored_question_id($questionid, $target);
+        $this->assertSame(
+            (int) $prototype->id,
+            $this->resolved_prototype_id($importedid),
+            'The imported question is not using the prototype this site already had.'
+        );
+        $this->assertSame('IMPORTED', $this->resolved_template($importedid));
+    }
+
+    /**
+     * A quiz borrowing from another course's shared bank keeps working.
+     *
+     * The seventh exit scenario, and the one the design gives a paragraph of
+     * its own: when course A's quiz uses questions from a shared bank in
+     * course B, a backup of A contains *copies of just those questions*, not
+     * B's bank, and a restore on another site puts the copies in a new bank of
+     * their own. The sharing is lost -- existing Moodle behaviour CodeRunner
+     * cannot change -- so what has to hold is that the copies still carry the
+     * prototypes they need from B. That is the question attachment point's
+     * reason for existing.
+     *
+     * Unlike test_a_borrowed_prototype_travels_with_the_question, where the
+     * question was in this course's bank and only its prototype was elsewhere,
+     * here the *question* belongs to the other course too.
+     *
+     * One known limitation falls out of this shape and is pinned below rather
+     * than omitted: the borrowed prototype's support files do not travel.
+     */
+    public function test_a_quiz_borrowing_another_courses_bank_keeps_its_prototypes(): void {
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/quiz/locallib.php');
+
+        // Course B: a shared bank, a prototype of its own, and a question.
+        $lender = $this->getDataGenerator()->create_course();
+        $lentbank = $this->getDataGenerator()->create_module('qbank', ['course' => $lender->id]);
+        $lentcategory = (int) question_get_default_category(
+            \context_module::instance($lentbank->cmid)->id
+        )->id;
+        $borrowed = $this->repo->create(
+            'shared_bank_type',
+            (int) $lender->id,
+            new override_set(['template' => 'FROM THE LENDER'], 'shared_bank_type')
+        );
+        $this->add_support_file($borrowed, 'shared.py', 'print("shared")');
+        $questionid = $this->make_question($borrowed, $lentcategory);
+
+        // Course A: a quiz using course B's question.
+        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id]);
+        quiz_add_quiz_question($questionid, $quiz);
+
+        $backupid = $this->backup_course();
+
+        // Another site: neither course and no prototype.
+        delete_course($this->course, false);
+        delete_course($lender, false);
+        $DB->delete_records(prototype_repository::VERSIONS, ['prototypeid' => $borrowed->id]);
+        $DB->delete_records(prototype_repository::PROTOTYPES, ['id' => $borrowed->id]);
+
+        $newcourseid = $this->restore($backupid);
+
+        $created = $this->repo->find_one_by_uuid($borrowed->uuid, $newcourseid);
+        $this->assertNotNull(
+            $created,
+            "The lending course's prototype never travelled, so the quiz's questions are broken."
+        );
+
+        $restoredid = $this->restored_question_id($questionid, $newcourseid);
+        $this->assertSame(
+            (int) $created->id,
+            $this->resolved_prototype_id($restoredid),
+            'The borrowed question was not linked to the prototype that travelled with it.'
+        );
+        $this->assertSame('FROM THE LENDER', $this->resolved_template($restoredid));
+
+        // The documented limitation, pinned rather than left out so that
+        // closing it is noticed. A file annotation's context is fixed when the
+        // backup structure is defined, and a prototype's files live in its own
+        // course's context, so one annotation cannot cover prototypes from two
+        // courses: an out-of-course prototype carries its rows but not its
+        // files. It costs nothing on the same site, where the prototype is
+        // matched by uuid and keeps the files it has; only this cross-site
+        // shape lands one without them. Closing it means not scoping prototype
+        // files by course, which is a migration and belongs to phase 4 -- and
+        // when it is closed, this assertion is the one to flip.
+        $this->assertArrayNotHasKey(
+            'shared.py',
+            $this->repo->version_files($created, (int) $created->currentversion->id),
+            "An out-of-course prototype's files now travel, so phase 4's file scoping has "
+                . 'landed and this expectation is out of date.'
+        );
+    }
+
+    /**
      * A prototype in the course, with one version.
      *
      * @param string $name the prototype name.
@@ -524,16 +683,18 @@ final class backup_restore_test extends \advanced_testcase {
     /**
      * A CodeRunner question in the course's bank, using the given prototype.
      *
-     * @param int $prototypeid the prototype it depends on.
+     * @param prototype $prototype the prototype it depends on.
+     * @param int|null $categoryid the question category, defaulting to this
+     *      course's own bank.
      * @return int the question id.
      */
-    private function make_question(prototype $prototype): int {
+    private function make_question(prototype $prototype, ?int $categoryid = null): int {
         global $DB;
 
         $question = $this->getDataGenerator()->get_plugin_generator('core_question')->create_question(
             'coderunner',
             null,
-            ['category' => $this->categoryid, 'name' => 'Backed up question']
+            ['category' => $categoryid ?? $this->categoryid, 'name' => 'Backed up question']
         );
         // Overriding nothing, so that what the prototype supplies shows
         // through; and `coderunnertype` carrying the prototype's name, which
@@ -562,7 +723,7 @@ final class backup_restore_test extends \advanced_testcase {
      *
      * @return string the backup id.
      */
-    private function backup_course(): string {
+    private function backup_course(int $mode = \backup::MODE_IMPORT): string {
         global $USER;
 
         $bc = new \backup_controller(
@@ -570,7 +731,7 @@ final class backup_restore_test extends \advanced_testcase {
             $this->course->id,
             \backup::FORMAT_MOODLE,
             \backup::INTERACTIVE_NO,
-            \backup::MODE_IMPORT,
+            $mode,
             $USER->id
         );
         $backupid = $bc->get_backupid();
@@ -587,26 +748,133 @@ final class backup_restore_test extends \advanced_testcase {
      * @return int the new course's id.
      */
     private function restore(string $backupid): int {
-        global $USER;
-
         $newcourseid = \restore_dbops::create_new_course(
             'Restored',
             'restored_' . $backupid,
             (int) $this->getDataGenerator()->create_category()->id
         );
+
+        return $this->restore_into($backupid, $newcourseid);
+    }
+
+    /**
+     * Copy the course the way *Copy course* does, in line.
+     *
+     * The sequence is `\core\task\asynchronous_copy_task::execute()`'s, which
+     * is the only authority on it, run here rather than through the adhoc task
+     * that queues it. Three things differ from an ordinary restore and each is
+     * why a plainer version of this did not work: MODE_COPY on the restore
+     * refuses to be constructed without the copy data; a MODE_COPY backup
+     * leaves a *file* rather than an unzipped directory, so it has to be
+     * extracted into the plan's basepath; and `prepare_copy()` is what moves
+     * the controller into the state a precheck will accept.
+     *
+     * @return int the new course's id.
+     */
+    private function copy_course(): int {
+        global $USER;
+
+        $bc = new \backup_controller(
+            \backup::TYPE_1COURSE,
+            $this->course->id,
+            \backup::FORMAT_MOODLE,
+            \backup::INTERACTIVE_NO,
+            \backup::MODE_COPY,
+            $USER->id,
+            \backup::RELEASESESSION_YES
+        );
+        $backupid = $bc->get_backupid();
+        $bc->execute_plan();
+        $file = $bc->get_results()['backup_destination'];
+        $basepath = $bc->get_plan()->get_basepath();
+        $bc->destroy();
+
+        $newcourseid = (int) \restore_dbops::create_new_course(
+            'Copy',
+            'copy_' . $backupid,
+            (int) $this->getDataGenerator()->create_category()->id
+        );
+
         $rc = new \restore_controller(
             $backupid,
             $newcourseid,
             \backup::INTERACTIVE_NO,
-            \backup::MODE_GENERAL,
+            \backup::MODE_COPY,
             $USER->id,
-            \backup::TARGET_NEW_COURSE
+            \backup::TARGET_NEW_COURSE,
+            null,
+            \backup::RELEASESESSION_NO,
+            $this->copy_data($backupid)
+        );
+        $file->extract_to_pathname(get_file_packer('application/vnd.moodle.backup'), $basepath);
+        $rc->prepare_copy();
+        $rc->execute_precheck();
+        $rc->execute_plan();
+        $rc->destroy();
+
+        return $newcourseid;
+    }
+
+    /**
+     * The copy data a MODE_COPY restore insists on.
+     *
+     * The fields `copy_helper::process_formdata()` requires, plus the roles it
+     * adds; none of them is what this test is about, so they are the course's
+     * own values and no user data.
+     *
+     * @param string $backupid the backup, for a distinct short name.
+     * @return \stdClass the copy data.
+     */
+    private function copy_data(string $backupid): \stdClass {
+        return (object) [
+            'courseid' => (int) $this->course->id,
+            'fullname' => 'Copy',
+            'shortname' => 'copy_' . $backupid,
+            'category' => (int) $this->course->category,
+            'visible' => 1,
+            'startdate' => (int) $this->course->startdate,
+            'enddate' => 0,
+            'idnumber' => '',
+            'userdata' => 0,
+            'keptroles' => [],
+        ];
+    }
+
+    /**
+     * Restore a backup into a course that already exists.
+     *
+     * @param string $backupid the backup to restore.
+     * @param int $courseid the course to restore into.
+     * @param int $target one of the backup::TARGET_ constants.
+     * @param int $mode one of the backup::MODE_ constants.
+     * @param \stdClass|null $copydata the copy data MODE_COPY insists on.
+     * @return int the course restored into.
+     */
+    private function restore_into(
+        string $backupid,
+        int $courseid,
+        int $target = \backup::TARGET_NEW_COURSE,
+        int $mode = \backup::MODE_GENERAL,
+        ?\stdClass $copydata = null
+    ): int {
+        global $USER;
+
+        $rc = new \restore_controller(
+            $backupid,
+            $courseid,
+            \backup::INTERACTIVE_NO,
+            $mode,
+            $USER->id,
+            $target,
+            null,
+            \backup::RELEASESESSION_NO,
+            $copydata
         );
         $this->assertTrue($rc->execute_precheck());
         $rc->execute_plan();
         $rc->destroy();
 
-        return (int) $newcourseid;
+        return $courseid;
     }
 
     /**
