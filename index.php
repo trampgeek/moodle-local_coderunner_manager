@@ -169,13 +169,19 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
 }
 
 /**
- * The actions cell for one prototype: a Delete button, disabled with its
- * reason where the prototype may not go.
+ * The actions cell for one prototype: an export and a Delete button, the
+ * latter disabled with its reason where the prototype may not go.
  *
  * Disabled rather than absent, so that an author looking for the action finds
  * it and is told why it is not available, instead of hunting a page that
  * simply does not offer one. The reason comes from the repository, which is
  * also what refuses the deletion itself, so the two agree.
+ *
+ * The export writes this prototype's whole chain as a single CodeRunner 5
+ * question type, which is the only place flattening happens: a question export
+ * never flattens, because a flattened question withholds nothing from its
+ * recipient (decision 33). It is offered beside Delete because a prototype is
+ * what a 5.x site cannot build for itself.
  *
  * @param prototype $prototype the prototype.
  * @param array $counts its question and child counts, already gathered.
@@ -191,18 +197,35 @@ function prototype_actions_cell(prototype $prototype, array $counts, moodle_url 
         return '';
     }
 
+    // Not offered for Site defaults, which is the root every chain stands on
+    // rather than a question type: flattened into a CodeRunner 5 prototype
+    // question it would arrive there as a type called "Site defaults" that
+    // defines nothing.
+    $export = $prototype->issitedefaults ? '' : html_writer::link(
+        new moodle_url('/local/coderunner_manager/exportlegacy.php', [
+            'id' => $prototype->id,
+            'courseid' => $pageurl->param('courseid') ?: 0,
+            'sesskey' => sesskey(),
+        ]),
+        get_string('exportlegacy', 'local_coderunner_manager'),
+        [
+            'class' => 'btn btn-sm btn-outline-secondary mr-1',
+            'title' => get_string('exportlegacy_help', 'local_coderunner_manager'),
+        ]
+    );
+
     $label = get_string('deleteprototype', 'local_coderunner_manager');
     $reason = $repo->undeletable_reason($prototype, $counts);
 
     if ($reason !== null) {
-        return html_writer::tag('span', $label, [
+        return $export . html_writer::tag('span', $label, [
             'class' => 'btn btn-sm btn-outline-danger disabled',
             'aria-disabled' => 'true',
             'title' => get_string('deleteundeletable', 'local_coderunner_manager', $reason),
         ]);
     }
 
-    return html_writer::link(
+    return $export . html_writer::link(
         new moodle_url($pageurl, ['delete' => $prototype->id]),
         $label,
         ['class' => 'btn btn-sm btn-outline-danger']

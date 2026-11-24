@@ -165,6 +165,9 @@ $string['supportfilesownheading'] = 'This prototype\'s own files';
 
 // Deleting a prototype, from the library page.
 $string['deleteprototype'] = 'Delete';
+$string['exportlegacy'] = 'Export for CodeRunner 5';
+$string['exportlegacy_help'] = 'Download this question type, with everything it inherits resolved into it, as a question type a CodeRunner 5 site can import. Import it there before the questions that use it.';
+
 $string['deleteprototypeconfirm'] = 'Delete the prototype "{$a->name}"?
 
 Warning - this will delete all {$a->versions} version(s) of this prototype, irrecoverably.';
