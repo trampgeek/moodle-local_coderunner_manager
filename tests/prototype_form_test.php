@@ -499,7 +499,7 @@ final class prototype_form_test extends \advanced_testcase {
             $this->stored_file('mine.py', 'own'),
         ]));
 
-        $this->assertTrue($mform->elementExists('supportfilesheader'));
+        $this->assertTrue($mform->elementExists('section_' . form_section::FILES->value));
         $this->assertTrue($mform->elementExists('supportfiles'));
         $this->assertTrue($mform->elementExists('supportfilesinheritednote'));
         $this->assertTrue($mform->elementExists('supportfilesmarks'));
@@ -533,7 +533,7 @@ final class prototype_form_test extends \advanced_testcase {
             $this->stored_file('mine.py', 'own'),
         ]));
 
-        $label = $mform->getElement('supportfilesheader')->toHtml();
+        $label = $mform->getElement('section_' . form_section::FILES->value)->toHtml();
         $this->assertStringContainsString(
             get_string('sectionchanged', 'qtype_coderunner', 2),
             $label,

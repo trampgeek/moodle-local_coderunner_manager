@@ -141,20 +141,15 @@ class prototype_form extends \moodleform {
         $mform->setType('documentation', PARAM_RAW);
         $mform->addHelpButton('documentation', 'documentation', 'local_coderunner_manager');
 
-        // Support files get a section of their own rather than sitting under
-        // Identity. They are not identity: name, parent, summary and
-        // documentation are all *about* the prototype and none of them
-        // inherits, while support files merge along the chain by filename,
-        // which is the behaviour of the collected settings. Filed with the
-        // former, the form showed only the prototype's own files with nothing
-        // to say that its ancestors supply more -- so a prototype owning three
-        // files and inheriting nineteen read as a prototype with three -- and
-        // the section carried no change count, so there was nothing to see in
-        // "what changed" either.
-        $this->add_support_files_section($mform);
-
         // The settings, section by section, straight from the registry.
         foreach (self::sections() as $section) {
+            if ($section === form_section::FILES) {
+                // A set of files rather than a set of values, so the
+                // registry-driven component has nothing to render and this
+                // puts a file manager in the section's own place in the order.
+                $this->add_support_files_section($mform);
+                continue;
+            }
             if (!settings_form::fields_of($section)) {
                 continue;
             }
@@ -281,12 +276,16 @@ class prototype_form extends \moodleform {
                 $changed++;
             }
         }
-        $label = get_string('supportfilesheading', 'local_coderunner_manager');
+        // The section's own heading and element name, as for every other
+        // section: it now sits in the shared order, and a header named
+        // differently is one that tests and callers have to know about
+        // separately.
+        $label = form_section::FILES->label();
         if ($changed > 0) {
             $label .= ' · ' . get_string('sectionchanged', 'qtype_coderunner', $changed);
         }
 
-        $mform->addElement('header', 'supportfilesheader', $label);
+        $mform->addElement('header', settings_form::section_header(form_section::FILES), $label);
 
         $mform->addElement(
             'filemanager',
@@ -388,6 +387,11 @@ class prototype_form extends \moodleform {
     /**
      * The settings sections the editor shows, in the order it shows them.
      *
+     * The enum's own order, less the question's own section: design section 8
+     * says this editor shows *the same field sections as the question form*,
+     * and keeping a second list here is what let the two drift into different
+     * orders -- which is how the author found it on 26 November.
+     *
      * Test case field switches are included: deciding which test case fields a
      * question offers is a prototype author's job, which is why the fields
      * exist. Instance-only sections are not, since a prototype has no answer.
@@ -395,15 +399,10 @@ class prototype_form extends \moodleform {
      * @return form_section[] the sections.
      */
     public static function sections(): array {
-        return [
-            form_section::TEMPLATE,
-            form_section::PARAMETERS,
-            form_section::GRADING,
-            form_section::UI,
-            form_section::TESTCASEFIELDS,
-            form_section::SANDBOX,
-            form_section::EXTRAS,
-        ];
+        return array_values(array_filter(
+            form_section::cases(),
+            fn($section) => $section !== form_section::QUESTION
+        ));
     }
 
     /**
