@@ -1275,6 +1275,63 @@ class prototype_repository {
     }
 
     /**
+     * Delete every prototype a course owns, with its versions and its files.
+     *
+     * For course deletion, which is the one case that overrides the guards
+     * `delete()` applies: a prototype other courses still use goes anyway,
+     * because the course it belonged to is going. Its dependants then report
+     * themselves broken, as anything borrowed from a deleted course does.
+     *
+     * Each one's dependent questions are told first, because their resolved
+     * settings are cached and the cache outlives the row.
+     *
+     * Called from the `course_deleted` event, which fires once the deletion
+     * has happened. By then Moodle has deleted the course context and every
+     * file in it, so the support files are already gone and the context cannot
+     * be looked up -- hence `IGNORE_MISSING` below, and no complaint when
+     * there is nothing to delete. The files are only deleted here when the
+     * course is still standing, which is the case for any other caller.
+     *
+     * @param int $courseid the course being deleted.
+     * @return int how many prototypes were deleted.
+     */
+    public function delete_for_course(int $courseid): int {
+        global $DB;
+
+        $prototypes = $DB->get_records(self::PROTOTYPES, ['courseid' => $courseid], 'id');
+        if (!$prototypes) {
+            return 0;
+        }
+
+        $fs = get_file_storage();
+        $transaction = $DB->start_delegated_transaction();
+
+        foreach ($prototypes as $record) {
+            $prototype = $this->prototype_from_record($record);
+            $this->notify_dependent_questions((int) $prototype->id);
+
+            $context = \context_course::instance((int) $prototype->courseid, IGNORE_MISSING);
+            if ($context) {
+                $versionids = $DB->get_fieldset_select(
+                    self::VERSIONS,
+                    'id',
+                    'prototypeid = :id',
+                    ['id' => $prototype->id]
+                );
+                foreach ($versionids as $versionid) {
+                    $fs->delete_area_files($context->id, self::COMPONENT, self::FILEAREA, $versionid);
+                }
+            }
+            $DB->delete_records(self::VERSIONS, ['prototypeid' => $prototype->id]);
+            $DB->delete_records(self::PROTOTYPES, ['id' => $prototype->id]);
+        }
+
+        $transaction->allow_commit();
+
+        return count($prototypes);
+    }
+
+    /**
      * Delete a prototype and its whole version history.
      *
      * Refused while any other prototype derives from it. Once questions refer to

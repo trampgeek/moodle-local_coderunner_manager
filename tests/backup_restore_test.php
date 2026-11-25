@@ -759,6 +759,64 @@ final class backup_restore_test extends \advanced_testcase {
     }
 
     /**
+     * Deleting a course deletes the prototypes it owns, and their files.
+     *
+     * The policy the author settled on 25 November: anything shared out of a
+     * course stops being shared when the course is deleted, and a prototype is
+     * no exception. A question elsewhere that used it reports itself broken,
+     * which is what happens to anything else borrowed from a course that has
+     * gone.
+     *
+     * The alternative -- leaving the rows -- is what the code did before, and
+     * it left `courseid` naming a course that no longer exists, in which state
+     * `file_contextid()` raises on a missing course record and every question
+     * using the prototype dies on load.
+     */
+    public function test_deleting_a_course_deletes_its_prototypes(): void {
+        global $DB;
+
+        $prototype = $this->make_prototype('doomed_with_its_course', 'DOOMED');
+        $this->add_support_file($prototype, 'doomed.py', 'print("doomed")');
+        $versionid = (int) $prototype->currentversion->id;
+        $contextid = $this->repo->file_contextid($prototype);
+
+        // A site prototype, which must survive: its scope is the front page.
+        $siteprototype = $this->repo->create(
+            'site_survivor',
+            SITEID,
+            new override_set(['template' => 'SURVIVES'], 'site_survivor')
+        );
+
+        delete_course($this->course, false);
+
+        $this->assertSame(
+            0,
+            $DB->count_records(prototype_repository::PROTOTYPES, ['uuid' => $prototype->uuid]),
+            "The deleted course's prototype outlived it."
+        );
+        $this->assertSame(
+            0,
+            $DB->count_records(prototype_repository::VERSIONS, ['prototypeid' => $prototype->id]),
+            'Its versions were left behind.'
+        );
+        $this->assertEmpty(
+            get_file_storage()->get_area_files(
+                $contextid,
+                prototype_repository::COMPONENT,
+                prototype_repository::FILEAREA,
+                $versionid,
+                'filename',
+                false
+            ),
+            'Its support files were left behind.'
+        );
+        $this->assertNotNull(
+            $this->repo->get((int) $siteprototype->id),
+            'A site prototype was deleted with an unrelated course.'
+        );
+    }
+
+    /**
      * Copy the course the way *Copy course* does, in line.
      *
      * The sequence is `\core\task\asynchronous_copy_task::execute()`'s, which
