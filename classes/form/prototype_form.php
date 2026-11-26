@@ -25,7 +25,9 @@
 namespace local_coderunner_manager\form;
 
 use local_coderunner_manager\prototype;
+use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\redundant_files;
+use local_coderunner_manager\scope_picker;
 use qtype_coderunner\v6\form_section;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\question_settings;
@@ -53,6 +55,17 @@ class prototype_form extends \moodleform {
      * The menu naming the prototype this one inherits from.
      */
     const PARENT_FIELD = 'parentid';
+
+    /**
+     * The form group holding the pair of menus.
+     *
+     * The help button and any error anchor here rather than on a menu, because
+     * formslib shows both against the group when an element is inside one.
+     */
+    const PARENT_GROUP = 'parentgroup';
+
+    /** @var string The field holding the course whose library the parent menu offers. */
+    const PARENT_COURSE_FIELD = 'parentcourseid';
 
     /**
      * The hidden no-submit button that rebuilds the form on a change of parent.
@@ -83,8 +96,9 @@ class prototype_form extends \moodleform {
         // wrote those back over the draft's own.
         $editing = $this->_customdata['editing']
             ?? ($prototype?->draftversion ?? $prototype?->currentversion);
-        // Candidate parents, id => label, with cycles already excluded.
-        $parents = $this->_customdata['parents'];
+        // The prototypes this one may not inherit from: itself and everything
+        // below it, which would make a cycle.
+        $exclude = $this->_customdata['exclude'] ?? [];
         // True when the prototype may be read but not changed.
         $readonly = !empty($this->_customdata['readonly']);
         // The language the template is highlighted in, resolved from the whole
@@ -105,13 +119,25 @@ class prototype_form extends \moodleform {
         $mform->addRule('name', null, 'required', null, 'client');
         $mform->addHelpButton('name', 'prototypename', 'local_coderunner_manager');
 
-        $mform->addElement(
-            'select',
-            self::PARENT_FIELD,
-            get_string('parentprototype', 'local_coderunner_manager'),
-            $parents
+        // *Inherits from* is the same control as the question form's question
+        // type: one prototype chosen out of some course's library. The pair of
+        // menus is the manager's own component, so the two forms cannot drift
+        // apart, and a prototype may inherit from another course's prototype
+        // exactly as a question may be built on one (design section 7).
+        [$elements, $separators] = $this->parent_picker($exclude)->elements(
+            $mform,
+            (int) $this->_customdata['courseid'],
+            $this->_customdata['parentid'] ?: null
         );
-        $mform->addHelpButton(self::PARENT_FIELD, 'parentprototype', 'local_coderunner_manager');
+        $mform->addGroup(
+            $elements,
+            self::PARENT_GROUP,
+            get_string('parentprototype', 'local_coderunner_manager'),
+            $separators,
+            false
+        );
+        $mform->setType(self::PARENT_FIELD, PARAM_INT);
+        $mform->addHelpButton(self::PARENT_GROUP, 'parentprototype', 'local_coderunner_manager');
 
         // The menu's reload button is registered here: unconditionally, so that
         // nothing about the request can leave a press unrecognised, and before
@@ -230,6 +256,10 @@ class prototype_form extends \moodleform {
         // reload and the stored one otherwise. Set for a new prototype as well
         // as an existing one: a form that showed Site defaults' values as
         // inherited while the menu read "No parent" saved the second.
+        //
+        // The default is set *and* settled in definition_after_data(), because
+        // a default loses to a submitted value and on a reload the submission
+        // is one render out of date; see scope_picker::settle().
         $mform->setDefault(self::PARENT_FIELD, $this->_customdata['parentid'] ?? 0);
 
         if ($prototype) {
@@ -439,6 +469,45 @@ class prototype_form extends \moodleform {
     }
 
     /**
+     * The shared control, configured for a prototype's parent.
+     *
+     * *No parent* rather than *Choose...*: a prototype with no parent is a
+     * root, which is a real answer and the one every built-in gives, where a
+     * question with no prototype is an unanswered required field.
+     *
+     * @param int[] $exclude the prototypes this one may not inherit from.
+     * @return scope_picker the pair of menus.
+     */
+    protected function parent_picker(array $exclude): scope_picker {
+        return new scope_picker(
+            self::PARENT_FIELD,
+            self::PARENT_COURSE_FIELD,
+            $exclude,
+            get_string('noparent', 'local_coderunner_manager'),
+            0
+        );
+    }
+
+    /**
+     * Settle what the two menus show, now that the form holds its data.
+     *
+     * See {@see scope_picker::settle()} for why the defaults cannot do it: on
+     * a no-submit reload formslib fills every element from a submission that
+     * is one render out of date, so a parent in the course the author has just
+     * come back to would read as *No parent*.
+     */
+    public function definition_after_data() {
+        parent::definition_after_data();
+
+        $this->parent_picker($this->_customdata['exclude'] ?? [])->settle(
+            $this->_form,
+            self::PARENT_GROUP,
+            (int) $this->_customdata['courseid'],
+            $this->_customdata['parentid'] ?: null
+        );
+    }
+
+    /**
      * Ask the page for the script that rebuilds the form on a change of parent.
      *
      * The script is the question type's, which owns the form component this
@@ -453,7 +522,7 @@ class prototype_form extends \moodleform {
         $PAGE->requires->js_call_amd(
             'qtype_coderunner/prototypereload',
             'init',
-            ['id_' . self::PARENT_FIELD, 'id_' . self::RELOAD_BUTTON]
+            ['id_' . self::PARENT_FIELD, 'id_' . self::RELOAD_BUTTON, 'id_' . self::PARENT_COURSE_FIELD]
         );
     }
 
@@ -472,6 +541,20 @@ class prototype_form extends \moodleform {
         $clash = $repo->name_clash($data['name'], (int) $data['courseid'], (int) $data['id']);
         if ($clash !== null) {
             $errors['name'] = get_string($clash, 'local_coderunner_manager', $data['name']);
+        }
+
+        // A parent in another course needs the capability there, and the check
+        // is in the code rather than only in the menu: a form can be submitted
+        // without having been built. Keeping a parent the prototype already
+        // has is always allowed, which is `may_choose()`'s rule and the same
+        // one the question form applies to a question's prototype -- otherwise
+        // an author with rights only in their own course could not edit a
+        // child of another course's prototype at all.
+        $chosen = empty($data[self::PARENT_FIELD]) ? null : (int) $data[self::PARENT_FIELD];
+        $previous = $this->_customdata['prototype'] ?? null;
+        $previous = $previous ? ($previous->draftversion ?? $previous->currentversion)?->parentid : null;
+        if (!(new prototype_candidates())->may_choose($chosen, $previous === null ? null : (int) $previous)) {
+            $errors[self::PARENT_GROUP] = get_string('parentnotallowed', 'local_coderunner_manager');
         }
 
         return $errors + $this->json_errors($data);

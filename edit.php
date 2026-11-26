@@ -25,8 +25,8 @@
 use local_coderunner_manager\form\prototype_form;
 use local_coderunner_manager\output\history_table;
 use local_coderunner_manager\output\version_diff;
-use local_coderunner_manager\prototype_candidates;
 use local_coderunner_manager\prototype_repository;
+use local_coderunner_manager\scope_picker;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
 use qtype_coderunner\v6\settings_form;
@@ -93,9 +93,17 @@ $PAGE->navbar->add(get_string('prototypelist', 'local_coderunner_manager'), $lis
 $PAGE->navbar->add($title);
 
 // What the prototype inherits: its parent chain, without the prototype itself.
+//
+// A submission that changed the *course* menu carries a parent from the scope
+// before it, so it says nothing about what this prototype inherits: the menu
+// had been showing *No parent* while the author was looking at a course that
+// does not hold the parent, and reading that as a deliberate choice would make
+// the prototype a root the next time it was saved. The stored parent stands
+// until the author answers the question this scope is asking.
+$submittedparent = scope_picker::scope_changed_for(prototype_form::PARENT_COURSE_FIELD) ? -1 : $parentid;
 $effectiveparent = prototype_form::effective_parentid(
     $prototype,
-    $parentid < 0 ? null : $parentid,
+    $submittedparent < 0 ? null : $submittedparent,
     $repo->site_defaults()?->id
 );
 $inherited = $effectiveparent
@@ -107,26 +115,14 @@ $inherited = $effectiveparent
 $editing = $prototype?->draftversion ?? $prototype?->currentversion;
 $own = $editing ? $editing->overrides : new override_set([], $prototype->name ?? '');
 
-// Candidate parents: anything this course can see, less the prototype itself
-// and anything descended from it, which would make a cycle.
-//
-// Shown as the tree it is, indented by depth, the way the question form's
-// prototype picker shows the same library. It was a flat list of bare names
-// until an author pointed out that the two menus disagreed, which is
-// prototype_candidates::as_options()'s job to settle rather than this page's.
-$candidates = [];
-$descendants = $prototype ? $repo->descendant_ids($prototype->id) : [];
-foreach ($repo->list_for_course($courseid) as $candidate) {
-    if ($prototype && ($candidate->id == $prototype->id || in_array($candidate->id, $descendants, true))) {
-        continue;
-    }
-    $candidates[$candidate->id] = $candidate;
-}
-
-$parents = [0 => get_string('noparent', 'local_coderunner_manager')];
-foreach ((new prototype_candidates())->as_options($candidates) as $id => $option) {
-    $parents[$id] = prototype_candidates::indented_label($option);
-}
+// What this prototype may not inherit from: itself and anything descended
+// from it, which would make a cycle. The library it may inherit from is the
+// form's to ask for -- *Inherits from* is the same pair of menus as the
+// question form's question type, so a parent in another course is reachable
+// and the two menus cannot disagree about the same library again.
+$exclude = $prototype
+    ? array_merge([$prototype->id], $repo->descendant_ids($prototype->id))
+    : [];
 
 if (($publish || $discard) && !$readonly && $prototype) {
     require_sesskey();
@@ -173,7 +169,7 @@ $form = new prototype_form($url, [
     'inherited' => $inherited,
     'own' => $own,
     'parentid' => $effectiveparent ?? 0,
-    'parents' => $parents,
+    'exclude' => $exclude,
     'courseid' => $courseid,
     'readonly' => $readonly,
     'language' => $language,

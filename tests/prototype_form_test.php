@@ -81,10 +81,102 @@ final class prototype_form_test extends \advanced_testcase {
                 ? $prototype->currentversion->overrides
                 : new override_set([], ''),
             'parentid' => $prototype?->parentid() ?? 0,
-            'parents' => [0 => 'None'],
+            'exclude' => $prototype ? array_merge([$prototype->id], $this->repo->descendant_ids($prototype->id)) : [],
             'courseid' => SITEID,
             'readonly' => $readonly,
         ]);
+    }
+
+    /**
+     * The parent menu, which lives inside the group carrying the label rather
+     * than at the top level of the form.
+     *
+     * @param \MoodleQuickForm $mform the built form.
+     * @return object|null the menu element, or null if the group has no such one.
+     */
+    private function parent_menu(\MoodleQuickForm $mform) {
+        if (!$mform->elementExists(prototype_form::PARENT_GROUP)) {
+            return null;
+        }
+        foreach ($mform->getElement(prototype_form::PARENT_GROUP)->getElements() as $element) {
+            if ($element->getName() === prototype_form::PARENT_FIELD) {
+                return $element;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * What a menu of the group is showing as its selection.
+     *
+     * @param object $element the menu.
+     * @return string the selected value, or '' for none.
+     */
+    private function selection($element): string {
+        $values = method_exists($element, 'getSelected') ? $element->getSelected() : $element->getValue();
+        $values = array_values((array) $values);
+        return $values === [] ? '' : (string) $values[0];
+    }
+
+    /**
+     * A parent in a course the author may not build on is refused on save, and
+     * the one the prototype already has is always allowed.
+     *
+     * The same rule as a question's prototype ({@see prototype_candidates::may_choose()}),
+     * and here for the same reason: *Inherits from* can now reach another
+     * course, so the menu is no longer the only thing standing between an
+     * author and another course's library, and a form can be submitted
+     * without having been built.
+     */
+    public function test_a_parent_in_a_forbidden_course_is_refused(): void {
+        $other = $this->getDataGenerator()->create_course();
+        $mine = $this->getDataGenerator()->create_course();
+        $theirs = $this->repo->create(
+            'theirs',
+            (int) $other->id,
+            new override_set(['template' => 'T'], 'theirs')
+        );
+        $child = $this->repo->create(
+            'mine',
+            (int) $mine->id,
+            new override_set(['template' => 'T'], 'mine'),
+            $theirs->id
+        );
+
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $mine->id, 'editingteacher');
+        $this->setUser($teacher);
+
+        $data = [
+            'id' => 0,
+            'name' => 'a_new_one',
+            'courseid' => (int) $mine->id,
+            prototype_form::PARENT_FIELD => $theirs->id,
+        ];
+
+        // A new prototype may not reach into that course.
+        $fresh = new prototype_form(null, [
+            'prototype' => null,
+            'inherited' => (new prototype_chain([]))->resolve(),
+            'own' => new override_set([], ''),
+            'parentid' => 0,
+            'exclude' => [],
+            'courseid' => (int) $mine->id,
+            'readonly' => false,
+        ]);
+        $errors = $fresh->validation($data, []);
+        $this->assertArrayHasKey(prototype_form::PARENT_GROUP, $errors);
+
+        // The one that already inherits from it keeps it, or its author could
+        // not edit it at all.
+        $existing = $this->build_form($this->repo->get_or_fail($child->id));
+        $data['id'] = $child->id;
+        $data['name'] = 'mine';
+        $this->assertArrayNotHasKey(
+            prototype_form::PARENT_GROUP,
+            $existing->validation($data, []),
+            'A prototype was refused the parent it already has.'
+        );
     }
 
     /**
@@ -96,7 +188,8 @@ final class prototype_form_test extends \advanced_testcase {
         $mform = $this->quickform($form);
 
         $this->assertTrue($mform->elementExists('name'));
-        $this->assertTrue($mform->elementExists('parentid'));
+        $this->assertTrue($mform->elementExists(prototype_form::PARENT_GROUP));
+        $this->assertNotNull($this->parent_menu($mform), 'The parent menu is inside the group.');
         $this->assertTrue($mform->elementExists('documentation'));
         $this->assertTrue($mform->elementExists('commitmessage'));
 
@@ -333,14 +426,17 @@ final class prototype_form_test extends \advanced_testcase {
             'inherited' => (new prototype_chain([]))->resolve(),
             'own' => new override_set([], ''),
             'parentid' => $defaults->id,
-            'parents' => [0 => 'None', $defaults->id => 'Site defaults'],
             'courseid' => SITEID,
             'readonly' => false,
         ]);
 
+        // Settled by the form's own late hook, which is where the selection
+        // is decided; a default would lose to a stale submitted value.
+        $form->definition_after_data();
+
         $this->assertSame(
-            [$defaults->id],
-            $this->quickform($form)->getElement(prototype_form::PARENT_FIELD)->getSelected(),
+            (string) $defaults->id,
+            $this->selection($this->parent_menu($this->quickform($form))),
             'The menu did not show the parent the form was built against.'
         );
     }
@@ -384,7 +480,6 @@ final class prototype_form_test extends \advanced_testcase {
             'inherited' => $this->repo->chain_for($drafted->id)->resolve(),
             'own' => $editing->overrides,
             'parentid' => $drafted->id,
-            'parents' => [0 => 'None', $drafted->id => 'another_parent'],
             'courseid' => SITEID,
             'readonly' => false,
         ]);
@@ -595,7 +690,7 @@ final class prototype_form_test extends \advanced_testcase {
             'inherited' => $inherited,
             'own' => $prototype->currentversion->overrides,
             'parentid' => $prototype->parentid() ?? 0,
-            'parents' => [0 => 'None'],
+            'exclude' => [$prototype->id],
             'courseid' => SITEID,
             'readonly' => false,
             'draftitemid' => $draftid,
