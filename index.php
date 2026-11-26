@@ -124,11 +124,11 @@ if (!$prototypes) {
     exit;
 }
 
-// Index the prototypes by parent so the tree can be walked from the roots down.
-$childrenof = [];
-foreach ($prototypes as $prototype) {
-    $childrenof[$prototype->parentid() ?? 0][] = $prototype;
-}
+// Index the prototypes by parent so the tree can be walked from the roots
+// down. The rule for a prototype whose parent is not in this list -- a child
+// of another course's prototype -- is prototype_candidates'; see
+// children_by_parent(), which this page's own bug is named in.
+$childrenof = prototype_candidates::children_by_parent($prototypes);
 
 /**
  * The name cell for one prototype: a link to the editor where this user can
@@ -209,7 +209,7 @@ function prototype_actions_cell(prototype $prototype, array $counts, moodle_url 
         ]),
         get_string('exportlegacy', 'local_coderunner_manager'),
         [
-            'class' => 'btn btn-sm btn-outline-secondary mr-1',
+            'class' => 'btn btn-sm btn-outline-secondary me-1',
             'title' => get_string('exportlegacy_help', 'local_coderunner_manager'),
         ]
     );

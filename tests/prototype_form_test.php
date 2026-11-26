@@ -123,7 +123,7 @@ final class prototype_form_test extends \advanced_testcase {
      * the one the prototype already has is always allowed.
      *
      * The same rule as a question's prototype ({@see prototype_candidates::may_choose()}),
-     * and here for the same reason: *Inherits from* can now reach another
+     * and here for the same reason: *Parent* can now reach another
      * course, so the menu is no longer the only thing standing between an
      * author and another course's library, and a form can be submitted
      * without having been built.

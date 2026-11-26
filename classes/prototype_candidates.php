@@ -212,6 +212,37 @@ class prototype_candidates {
     }
 
     /**
+     * A set of prototypes bucketed by parent, ready to be walked as a tree.
+     *
+     * **A prototype whose parent is not in the set is a root of it.** Any
+     * view of the library is a subset — one course's own prototypes and the
+     * site's, a group of the picker, a scope — and a prototype may inherit
+     * from outside whatever subset is being shown: a child of another course's
+     * prototype is the case the design asks for by name. Bucketed under a
+     * parent that is not there, such a prototype sits in a bucket nothing
+     * visits, and a walk from the roots down **loses it silently**. That is
+     * what happened to the library page: a prototype made in one course on
+     * another course's parent saved correctly, reported itself saved, and did
+     * not appear in the table.
+     *
+     * Shared because two things walk the library as a tree and both have to
+     * answer this the same way: this class, for the menus, and the library
+     * page itself.
+     *
+     * @param array $prototypes the set, keyed by prototype id.
+     * @return array parent id => its children, with 0 holding the roots.
+     */
+    public static function children_by_parent(array $prototypes): array {
+        $childrenof = [];
+        foreach ($prototypes as $prototype) {
+            $parentid = $prototype->parentid();
+            $key = ($parentid !== null && isset($prototypes[$parentid])) ? $parentid : 0;
+            $childrenof[$key][] = $prototype;
+        }
+        return $childrenof;
+    }
+
+    /**
      * One course's name, for the entry the course menu gives it.
      *
      * Asked one course at a time, and only for the course that owns the
@@ -384,7 +415,7 @@ class prototype_candidates {
      *
      * Public because two menus are built from it: the question form's
      * prototype picker, through {@see groups_for_course()}, and the prototype
-     * editor's *Inherits from*. They showed the library differently until the
+     * editor's *Parent* menu. They showed the library differently until the
      * second was given this one too -- a flat list of bare names against a
      * tree -- which is the sort of difference an author notices and no test
      * does.
@@ -395,12 +426,7 @@ class prototype_candidates {
      * @return array id => ['label', 'depth', 'courseid', 'summary'].
      */
     public function as_options(array $prototypes, bool $withcourse = false): array {
-        $childrenof = [];
-        foreach ($prototypes as $prototype) {
-            $parentid = $prototype->parentid();
-            $key = ($parentid !== null && isset($prototypes[$parentid])) ? $parentid : 0;
-            $childrenof[$key][] = $prototype;
-        }
+        $childrenof = self::children_by_parent($prototypes);
         foreach ($childrenof as &$children) {
             usort($children, fn($a, $b) => strnatcasecmp($a->name, $b->name));
         }

@@ -117,7 +117,7 @@ $own = $editing ? $editing->overrides : new override_set([], $prototype->name ??
 
 // What this prototype may not inherit from: itself and anything descended
 // from it, which would make a cycle. The library it may inherit from is the
-// form's to ask for -- *Inherits from* is the same pair of menus as the
+// form's to ask for -- *Parent* is the same pair of menus as the
 // question form's question type, so a parent in another course is reachable
 // and the two menus cannot disagree about the same library again.
 $exclude = $prototype

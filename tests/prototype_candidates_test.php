@@ -316,7 +316,7 @@ final class prototype_candidates_test extends \advanced_testcase {
      * One rule indents both menus that show the library.
      *
      * The question form's prototype picker and the prototype editor's
-     * *Inherits from* showed the same tree differently until they were given
+     * *Parent* showed the same tree differently until they were given
      * this method -- indented against a flat list of bare names -- which is
      * the sort of difference an author notices and no test did.
      *
@@ -401,6 +401,52 @@ final class prototype_candidates_test extends \advanced_testcase {
         $this->setUser($teacher);
 
         $this->assertSame([], $this->candidates->for_other_course((int) $other->id, $elsewhere->id));
+    }
+
+    /**
+     * A prototype whose parent is not in the set being shown is a root of it,
+     * so a walk from the roots down cannot lose it.
+     *
+     * This is the library page's bug of 26 November, found by the walkthrough:
+     * a prototype made in CourseA on CourseB's prototype saved, said it had
+     * saved, and did not appear in CourseA's table. It was bucketed under a
+     * parent that was not in the course's list, and the walk never visited
+     * that bucket. Nothing complained, which is why this is asserted here
+     * rather than left to the rendering.
+     */
+    public function test_a_prototype_whose_parent_is_absent_is_a_root(): void {
+        $other = $this->getDataGenerator()->create_course();
+        $elsewhere = $this->make_prototype('theirs', (int) $other->id);
+        $mine = $this->make_prototype('mine', (int) $this->course->id, $elsewhere->id);
+        $root = $this->make_prototype('my_root', (int) $this->course->id);
+        $child = $this->make_prototype('my_child', (int) $this->course->id, $root->id);
+
+        // The set the library page shows for this course, which does not hold
+        // the other course's prototype.
+        $shown = [];
+        foreach ([$mine, $root, $child] as $prototype) {
+            $shown[$prototype->id] = $prototype;
+        }
+
+        $buckets = prototype_candidates::children_by_parent($shown);
+        $rootids = array_map(fn($p) => $p->id, $buckets[0] ?? []);
+
+        $this->assertContains($mine->id, $rootids, 'A prototype with an absent parent must be a root here.');
+        $this->assertContains($root->id, $rootids);
+        $this->assertNotContains($child->id, $rootids, 'A child whose parent is here stays under it.');
+        $this->assertSame([$child->id], array_map(fn($p) => $p->id, $buckets[$root->id]));
+
+        // And every prototype shown is reachable from the roots, which is the
+        // property the page needs and the one that was broken.
+        $seen = [];
+        $walk = function (array $children) use (&$walk, &$seen, $buckets) {
+            foreach ($children as $prototype) {
+                $seen[] = $prototype->id;
+                $walk($buckets[$prototype->id] ?? []);
+            }
+        };
+        $walk($buckets[0] ?? []);
+        $this->assertEqualsCanonicalizing(array_keys($shown), $seen);
     }
 
     /**

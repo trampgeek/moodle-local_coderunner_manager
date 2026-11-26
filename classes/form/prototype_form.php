@@ -119,7 +119,7 @@ class prototype_form extends \moodleform {
         $mform->addRule('name', null, 'required', null, 'client');
         $mform->addHelpButton('name', 'prototypename', 'local_coderunner_manager');
 
-        // *Inherits from* is the same control as the question form's question
+        // *Parent* is the same control as the question form's question
         // type: one prototype chosen out of some course's library. The pair of
         // menus is the manager's own component, so the two forms cannot drift
         // apart, and a prototype may inherit from another course's prototype
