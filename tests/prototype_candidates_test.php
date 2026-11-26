@@ -55,7 +55,6 @@ final class prototype_candidates_test extends \advanced_testcase {
         $this->repo = new prototype_repository();
         $this->candidates = new prototype_candidates($this->repo);
         $this->course = $this->getDataGenerator()->create_course();
-        prototype_candidates::reset_caches();
     }
 
     /**
@@ -76,25 +75,6 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * Create a CodeRunner question in a course's own question bank, which is
-     * what makes a prototype count as used in that course.
-     *
-     * @param int $courseid the course.
-     * @param string $prototypename the prototype the question is built on.
-     */
-    private function make_question_in_course(int $courseid, string $prototypename): void {
-        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
-        $category = $generator->create_question_category([
-            'contextid' => \context_course::instance($courseid)->id,
-        ]);
-        $generator->create_question('coderunner', 'sqr', [
-            'category' => $category->id,
-            'coderunnertype' => $prototypename,
-        ]);
-        prototype_candidates::reset_caches();
-    }
-
-    /**
      * The options of one group, by key, or null if the group is not offered.
      *
      * @param array $groups the groups.
@@ -111,67 +91,16 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * A prototype a question in the course uses is reported as used there.
-     */
-    public function test_a_prototype_a_question_uses_is_used_in_the_course(): void {
-        $prototype = $this->make_prototype('python3', SITEID);
-        $this->make_question_in_course((int) $this->course->id, 'python3');
-
-        $this->assertSame(
-            [$prototype->id],
-            $this->candidates->ids_used_in_course((int) $this->course->id)
-        );
-    }
-
-    /**
-     * Another course's questions do not make a prototype used in this one,
-     * which is the whole point of the first group.
-     */
-    public function test_another_courses_questions_do_not_count(): void {
-        $this->make_prototype('python3', SITEID);
-        $other = $this->getDataGenerator()->create_course();
-        $this->make_question_in_course((int) $other->id, 'python3');
-
-        $this->assertSame([], $this->candidates->ids_used_in_course((int) $this->course->id));
-        $this->assertNotEmpty($this->candidates->ids_used_in_course((int) $other->id));
-    }
-
-    /**
-     * A question in an activity of the course counts too, because a bank can
-     * live in any module context, not only in the course's own.
-     */
-    public function test_a_question_in_an_activity_of_the_course_counts(): void {
-        $prototype = $this->make_prototype('python3', SITEID);
-        $quiz = $this->getDataGenerator()->create_module('quiz', ['course' => $this->course->id]);
-
-        $generator = $this->getDataGenerator()->get_plugin_generator('core_question');
-        $category = $generator->create_question_category([
-            'contextid' => \context_module::instance($quiz->cmid)->id,
-        ]);
-        $generator->create_question('coderunner', 'sqr', [
-            'category' => $category->id,
-            'coderunnertype' => 'python3',
-        ]);
-        prototype_candidates::reset_caches();
-
-        $this->assertSame(
-            [$prototype->id],
-            $this->candidates->ids_used_in_course((int) $this->course->id)
-        );
-    }
-
-    /**
      * The groups are a partition by scope: the course's own prototypes in the
      * first group, the site's in the second, and nothing listed twice.
      *
-     * Use decides nothing here. A prototype just created is unused by
-     * definition, and filing it with the site's built-ins put an author's
-     * newest work where they would not look for it.
+     * Scope is the only line drawn. A prototype just created is unused by
+     * definition, and an earlier grouping by use filed an author's newest work
+     * among the site's built-ins at the moment they came to use it.
      */
     public function test_the_default_groups_are_a_partition_by_scope(): void {
         $sitewide = $this->make_prototype('python3', SITEID);
         $mine = $this->make_prototype('cosc131_python3', (int) $this->course->id);
-        $this->make_question_in_course((int) $this->course->id, 'python3');
 
         $groups = $this->candidates->groups_for_course((int) $this->course->id);
         $thiscourse = $this->group($groups, prototype_candidates::THIS_COURSE);
@@ -179,8 +108,6 @@ final class prototype_candidates_test extends \advanced_testcase {
 
         $this->assertArrayHasKey($mine->id, $thiscourse);
         $this->assertArrayNotHasKey($mine->id, $site);
-        // In use by a question of this course, and still in the site group,
-        // because that is where it belongs.
         $this->assertArrayHasKey($sitewide->id, $site);
         $this->assertArrayNotHasKey($sitewide->id, $thiscourse);
 
@@ -210,11 +137,10 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * A child made in the course of its parent stays with it, whether or not
-     * anything uses it yet.
+     * A child made in the course of its parent stays with it.
      *
-     * This is what grouping by scope buys and grouping by use cannot: use is
-     * not hereditary, so a used parent and its unused child landed in
+     * This is what grouping by scope buys and grouping by use could not: use
+     * is not hereditary, so a used parent and its unused child landed in
      * different groups, and the child appeared as a root of the group it fell
      * into — which is how two new children of python3_scratchpad came to look
      * like they had not been created.
@@ -222,7 +148,6 @@ final class prototype_candidates_test extends \advanced_testcase {
     public function test_a_new_child_stays_with_its_parent(): void {
         $parent = $this->make_prototype('scratchpad', (int) $this->course->id);
         $child = $this->make_prototype('scratchpad_files', (int) $this->course->id, $parent->id);
-        $this->make_question_in_course((int) $this->course->id, 'scratchpad');
 
         $options = $this->group(
             $this->candidates->groups_for_course((int) $this->course->id),
@@ -231,45 +156,6 @@ final class prototype_candidates_test extends \advanced_testcase {
 
         $this->assertSame([$parent->id, $child->id], array_keys($options));
         $this->assertSame(1, $options[$child->id]['depth'], 'The child should sit under its parent.');
-    }
-
-    /**
-     * Another course's prototype that this course's questions already use is
-     * offered in its own group, labelled with the course it comes from.
-     */
-    public function test_a_borrowed_prototype_is_grouped_and_labelled(): void {
-        $other = $this->getDataGenerator()->create_course(['shortname' => 'COSC122-26S1']);
-        $borrowed = $this->make_prototype('cosc122_scratchpad', (int) $other->id);
-
-        // A question of this course built on it, which is what "already uses"
-        // means. The name does not resolve from this course, so the reference
-        // is made directly.
-        $this->make_question_in_course((int) $this->course->id, 'python3');
-        $this->point_every_question_at($borrowed->id);
-
-        $groups = $this->candidates->groups_for_course((int) $this->course->id);
-        $options = $this->group($groups, prototype_candidates::BORROWED);
-
-        $this->assertNotNull($options);
-        $this->assertSame('cosc122_scratchpad (COSC122-26S1)', $options[$borrowed->id]['label']);
-    }
-
-    /**
-     * The prototype a question already uses is always offered, even when it is
-     * out of scope, because a picker that omitted it would silently re-point
-     * the question the next time the form was saved.
-     */
-    public function test_the_current_choice_is_always_offered(): void {
-        $other = $this->getDataGenerator()->create_course();
-        $elsewhere = $this->make_prototype('someone_elses', (int) $other->id);
-
-        $groups = $this->candidates->groups_for_course((int) $this->course->id, $elsewhere->id);
-
-        $offered = [];
-        foreach ($groups as $group) {
-            $offered += $group['options'];
-        }
-        $this->assertArrayHasKey($elsewhere->id, $offered);
     }
 
     /**
@@ -412,10 +298,10 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * The second step lists that course's own prototypes, and not the site's,
-     * which the first two groups already offer.
+     * A scope lists that course's own prototypes, and not the site's, which
+     * the question's own scope already offers.
      */
-    public function test_the_second_step_lists_only_that_courses_prototypes(): void {
+    public function test_a_scope_lists_only_that_courses_prototypes(): void {
         $other = $this->getDataGenerator()->create_course();
         $theirs = $this->make_prototype('theirs', (int) $other->id);
         $sitewide = $this->make_prototype('python3', SITEID);
@@ -426,11 +312,6 @@ final class prototype_candidates_test extends \advanced_testcase {
         $this->assertArrayNotHasKey($sitewide->id, $group['options']);
     }
 
-    /**
-     * A course the author may not manage yields nothing at all, so the
-     * capability is enforced where the list is built and not only where it is
-     * shown.
-     */
     /**
      * One rule indents both menus that show the library.
      *
@@ -465,7 +346,12 @@ final class prototype_candidates_test extends \advanced_testcase {
         );
     }
 
-    public function test_the_second_step_refuses_a_course_without_the_capability(): void {
+    /**
+     * A course the author may not manage yields nothing at all, so the
+     * capability is enforced where the list is built and not only where it is
+     * shown.
+     */
+    public function test_a_scope_is_refused_without_the_capability(): void {
         $other = $this->getDataGenerator()->create_course();
         $this->make_prototype('theirs', (int) $other->id);
         $teacher = $this->getDataGenerator()->create_user();
@@ -476,15 +362,78 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
-     * Point every CodeRunner question at one prototype, standing in for a
-     * question saved against another course's prototype through the picker.
+     * Except for the prototype the question already uses, which that scope
+     * offers on its own.
      *
-     * @param int $prototypeid the prototype to point them at.
+     * The rule {@see prototype_candidates::may_choose()} applies on the save
+     * has to hold in the picker too: a menu that could not show the question's
+     * own value would leave an author with rights only in their own course
+     * unable to edit such a question at all.
      */
-    private function point_every_question_at(int $prototypeid): void {
-        global $DB;
+    public function test_a_prototype_in_use_is_offered_without_the_capability(): void {
+        $other = $this->getDataGenerator()->create_course();
+        $inuse = $this->make_prototype('theirs', (int) $other->id);
+        $alsotheirs = $this->make_prototype('their_other_one', (int) $other->id);
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $this->course->id, 'editingteacher');
+        $this->setUser($teacher);
 
-        $DB->set_field('question_coderunner_options', 'prototypeid', $prototypeid, []);
-        prototype_candidates::reset_caches();
+        $group = $this->candidates->for_other_course((int) $other->id, $inuse->id);
+
+        $this->assertSame([$inuse->id], array_keys($group['options']));
+        $this->assertArrayNotHasKey(
+            $alsotheirs->id,
+            $group['options'],
+            'Nothing else of that course comes with it.'
+        );
+    }
+
+    /**
+     * And a prototype of some third course is not smuggled in by naming it:
+     * the scope asked for is the scope answered.
+     */
+    public function test_a_prototype_in_use_is_offered_only_in_its_own_scope(): void {
+        $other = $this->getDataGenerator()->create_course();
+        $third = $this->getDataGenerator()->create_course();
+        $elsewhere = $this->make_prototype('third_courses', (int) $third->id);
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $this->course->id, 'editingteacher');
+        $this->setUser($teacher);
+
+        $this->assertSame([], $this->candidates->for_other_course((int) $other->id, $elsewhere->id));
+    }
+
+    /**
+     * A prototype's own course, which is the scope the picker opens on, and
+     * that course's name for the menu.
+     */
+    public function test_a_prototype_reports_its_own_course(): void {
+        $other = $this->getDataGenerator()->create_course(['shortname' => 'COSC122-26S1']);
+        $theirs = $this->make_prototype('theirs', (int) $other->id);
+
+        $this->assertSame((int) $other->id, $this->candidates->course_of($theirs->id));
+        $this->assertSame('COSC122-26S1', $this->candidates->course_name((int) $other->id));
+        $this->assertNull($this->candidates->course_of(null));
+        $this->assertNull($this->candidates->course_of(999999));
+    }
+
+    /**
+     * The course menu is filtered by capability as well as by what each course
+     * owns, so an author is never offered a library they may not build on.
+     */
+    public function test_only_courses_the_author_may_use_are_offered(): void {
+        $allowed = $this->getDataGenerator()->create_course(['shortname' => 'ALLOWED']);
+        $forbidden = $this->getDataGenerator()->create_course(['shortname' => 'FORBIDDEN']);
+        $this->make_prototype('theirs', (int) $allowed->id);
+        $this->make_prototype('not_for_me', (int) $forbidden->id);
+
+        $teacher = $this->getDataGenerator()->create_user();
+        $this->getDataGenerator()->enrol_user($teacher->id, $this->course->id, 'editingteacher');
+        $this->getDataGenerator()->enrol_user($teacher->id, $allowed->id, 'editingteacher');
+        $this->setUser($teacher);
+
+        $courses = $this->candidates->borrowable_courses((int) $this->course->id);
+
+        $this->assertSame([(int) $allowed->id => 'ALLOWED'], $courses);
     }
 }

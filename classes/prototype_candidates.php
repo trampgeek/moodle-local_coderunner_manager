@@ -32,25 +32,21 @@ namespace local_coderunner_manager;
  * about prototypes and about which courses a user may borrow from; the question
  * type's picker only renders what this produces (design section 5).
  *
- * Three groups are offered by default, and they are a partition rather than
- * three overlapping lists. They are drawn by **scope**, which is the line the
- * author's own library follows: a child prototype is made in the same course
- * as its parent, so a group is a whole subtree rather than a slice through
- * one. An empty group is not offered at all, so a site using only the
- * built-ins shows one group and no heading to choose between.
+ * Two groups are offered for the question's own course, and they are a
+ * partition rather than two overlapping lists. They are drawn by **scope**,
+ * which is the line the author's own library follows: a child prototype is
+ * made in the same course as its parent, so a group is a whole subtree rather
+ * than a slice through one. An empty group is not offered at all, so a site
+ * using only the built-ins shows one group and no heading to choose between.
  *
  * 1. **This course** — prototypes belonging to the question's own course, in
  *    tree order.
- * 2. **Site** — the site library, in tree order.
- * 3. **Already borrowed from another course** — prototypes belonging to another
- *    course that this course's questions already use, each labelled with its
- *    course.
+ * 2. **Site** — the site library, in tree order, which every course sees.
  *
- * Anything else from another course is reached through a deliberate second
- * step, which is what {@see borrowable_courses()} and
- * {@see for_other_course()} serve. Keeping it behind that step keeps the list
- * short for an author with rights in many courses, and keeps the expensive
- * capability query off every page load of the question form.
+ * Another course's prototypes are offered the same way, through
+ * {@see for_other_course()}: a scope is one course's library, so that list
+ * needs no groups and no course in its labels. Which courses a scope may be
+ * chosen from is {@see borrowable_courses()}.
  */
 class prototype_candidates {
     /** @var string Prototypes belonging to the question's own course. */
@@ -59,10 +55,7 @@ class prototype_candidates {
     /** @var string Prototypes belonging to the site, which every course sees. */
     const SITE = 'site';
 
-    /** @var string Other courses' prototypes that this course already uses. */
-    const BORROWED = 'borrowed';
-
-    /** @var string The prototypes of one other course, chosen in the second step. */
+    /** @var string The prototypes of one other course, chosen as the scope. */
     const OTHER_COURSE = 'othercourse';
 
     /** @var string The capability that governs using a course's prototypes. */
@@ -70,9 +63,6 @@ class prototype_candidates {
 
     /** @var prototype_repository prototype storage. */
     private prototype_repository $repository;
-
-    /** @var array Prototype ids used by each course asked about, keyed by course id. */
-    private static array $usedcache = [];
 
     /**
      * @param prototype_repository|null $repository storage, or a new one.
@@ -84,36 +74,19 @@ class prototype_candidates {
     /**
      * The groups a question in this course is offered, in the order shown.
      *
-     * The currently selected prototype is always included, whatever its scope
-     * and whatever the author's rights in its course, because a picker that
-     * omits the question's own prototype would silently re-point the question
-     * on the next save. Where it belongs to a course not otherwise listed it
-     * forms a group of its own.
+     * The question's own course only. A prototype belonging to another course
+     * is offered in that course's scope, through {@see for_other_course()},
+     * which is where the picker goes for one — including the prototype a
+     * question already uses, so that nothing here has to make room for it.
      *
      * @param int $courseid the course the question belongs to.
-     * @param int|null $selectedid the prototype the question currently uses.
      * @return array a list of ['key' => string, 'options' => array], each
      *      option being id => ['label', 'depth', 'courseid', 'summary'].
      */
-    public function groups_for_course(int $courseid, ?int $selectedid = null): array {
-        $usedhere = $this->ids_used_in_course($courseid);
-
+    public function groups_for_course(int $courseid): array {
         $local = [];
-        $borrowed = [];
         foreach ($this->repository->list_for_course($courseid) as $prototype) {
             $local[$prototype->id] = $prototype;
-        }
-        foreach ($usedhere as $id) {
-            if (!isset($local[$id]) && ($prototype = $this->repository->get($id))) {
-                // Used here but belonging to another course.
-                $borrowed[$id] = $prototype;
-            }
-        }
-
-        if ($selectedid && !isset($local[$selectedid]) && !isset($borrowed[$selectedid])) {
-            if ($selected = $this->repository->get($selectedid)) {
-                $borrowed[$selectedid] = $selected;
-            }
         }
 
         // Partitioned by scope, not by use. An earlier version put the
@@ -136,71 +109,123 @@ class prototype_candidates {
         $groups = [
             self::THIS_COURSE => array_filter($local, fn($p) => !$issite($p)),
             self::SITE => array_filter($local, $issite),
-            self::BORROWED => $borrowed,
         ];
 
         $result = [];
         foreach ($groups as $key => $prototypes) {
             if ($prototypes) {
-                $result[] = ['key' => $key, 'options' => $this->as_options($prototypes, $key === self::BORROWED)];
+                $result[] = ['key' => $key, 'options' => $this->as_options($prototypes)];
             }
         }
         return $result;
     }
 
     /**
-     * The prototypes of one other course, for the picker's second step.
+     * The prototypes of another course: one scope of the picker.
+     *
+     * **A prototype the question already uses is offered even where the author
+     * may not browse its course.** Otherwise a question built on another
+     * course's prototype could not be edited at all by an author with rights
+     * only in its own course: the menu would not hold the question's own
+     * value, so saving the form would either re-point the question or fail its
+     * own validation. The same rule governs the save
+     * ({@see may_choose()}): the capability is on *changing* the reference,
+     * not on keeping it. Nothing else of that course is offered with it.
      *
      * @param int $courseid the course to list.
-     * @return array a group, or an empty array if the user may not use it.
+     * @param int|null $selectedid the prototype the question currently uses.
+     * @return array a group, or an empty array if there is nothing to offer.
      */
-    public function for_other_course(int $courseid): array {
-        if (!$this->may_use_course($courseid)) {
-            return [];
-        }
-
+    public function for_other_course(int $courseid, ?int $selectedid = null): array {
         $prototypes = [];
-        foreach ($this->repository->list_for_course($courseid) as $prototype) {
-            if ($prototype->courseid === $courseid) {
-                // The site prototypes come back with them and are already
-                // offered in the course's own group.
-                $prototypes[$prototype->id] = $prototype;
+        if ($this->may_use_course($courseid)) {
+            foreach ($this->repository->list_for_course($courseid) as $prototype) {
+                if ((int) $prototype->courseid === $courseid) {
+                    // The site prototypes come back with them and are already
+                    // offered in the question's own scope.
+                    $prototypes[$prototype->id] = $prototype;
+                }
+            }
+        } else if ($selectedid && ($selected = $this->repository->get($selectedid))) {
+            if ((int) $selected->courseid === $courseid) {
+                $prototypes[$selected->id] = $selected;
             }
         }
 
         return $prototypes
-            ? ['key' => self::OTHER_COURSE, 'options' => $this->as_options($prototypes, true)]
+            ? ['key' => self::OTHER_COURSE, 'options' => $this->as_options($prototypes)]
             : [];
     }
 
     /**
      * The courses the user may borrow prototypes from, other than this one.
      *
-     * Deliberately not called while the picker is merely being shown: resolving
-     * a capability across every course is the one expensive thing here, and an
-     * author with rights in hundreds of courses would pay for it on every load
-     * of the question form. The picker asks for it only when the author has
-     * said they want another course.
+     * **The cheap filter runs first, and that is what makes this affordable on
+     * every load of the question form.** The courses that own prototypes are
+     * one `SELECT DISTINCT courseid` over the manager's own table
+     * ({@see course_ids_with_prototypes()}) and there are as many of them as
+     * there are courses that have written a prototype — a handful on a real
+     * site, not one per course. The capability is then resolved against just
+     * those, each a context fetch Moodle caches. Asked the other way round,
+     * through `get_user_capability_course()`, the cost is one row per course
+     * the user is enrolled in or can see, which for an administrator is the
+     * whole site; that is the shape the picker's scope menu cannot pay for,
+     * since it is drawn whenever the author has somewhere to borrow from.
      *
      * @param int $excludecourseid the question's own course, left out.
-     * @return array course id => course name.
+     * @return array course id => course name, by name.
      */
     public function borrowable_courses(int $excludecourseid): array {
-        $courses = get_user_capability_course(self::CAPABILITY, null, true, 'shortname', 'shortname ASC');
-        if (!$courses) {
+        global $DB;
+
+        $withprototypes = $this->course_ids_with_prototypes();
+        unset($withprototypes[$excludecourseid], $withprototypes[(int) SITEID]);
+        if (!$withprototypes) {
             return [];
         }
 
-        $withprototypes = $this->course_ids_with_prototypes();
+        $allowed = array_filter(array_keys($withprototypes), fn($id) => $this->may_use_course($id));
+        if (!$allowed) {
+            return [];
+        }
+
         $names = [];
+        $courses = $DB->get_records_list('course', 'id', $allowed, 'shortname ASC', 'id, shortname');
         foreach ($courses as $course) {
-            $id = (int) $course->id;
-            if ($id === $excludecourseid || $id === (int) SITEID || !isset($withprototypes[$id])) {
-                continue;
-            }
-            $names[$id] = format_string($course->shortname);
+            $names[(int) $course->id] = format_string($course->shortname);
         }
         return $names;
+    }
+
+    /**
+     * The course a prototype belongs to, which is the scope it is offered in.
+     *
+     * @param int|null $prototypeid the prototype.
+     * @return int|null its course id, or null if there is no such prototype.
+     */
+    public function course_of(?int $prototypeid): ?int {
+        if (!$prototypeid) {
+            return null;
+        }
+        $prototype = $this->repository->get($prototypeid);
+        return $prototype === null ? null : (int) $prototype->courseid;
+    }
+
+    /**
+     * One course's name, for the entry the course menu gives it.
+     *
+     * Asked one course at a time, and only for the course that owns the
+     * question's current prototype: {@see borrowable_courses()} names the rest
+     * in a single query, and this is the one course that may not be among them.
+     *
+     * @param int $courseid the course.
+     * @return string its short name, or an empty string if it has gone.
+     */
+    public function course_name(int $courseid): string {
+        global $DB;
+
+        $shortname = $DB->get_field('course', 'shortname', ['id' => $courseid]);
+        return $shortname === false ? '' : format_string($shortname);
     }
 
     /**
@@ -310,94 +335,6 @@ class prototype_candidates {
         }
         $prototype = $this->repository->get($prototypeid);
         return $prototype !== null && $this->may_use_course($prototype->courseid);
-    }
-
-    /**
-     * The prototype ids used by the CodeRunner questions of one course.
-     *
-     * Every bank of the course counts: its own question categories, the banks
-     * of its `mod_qbank` instances, and the categories of activities that still
-     * hold their own. They are reached through the context tree rather than by
-     * listing modules, so a bank in any kind of activity is included.
-     *
-     * **Two queries, and the shape is what makes it affordable.** Asked as one
-     * join with the context test in it, MySQL drives from
-     * `question_coderunner_options` and filters by context last, so the cost is
-     * flat in the course and linear in the *site*: measured warm on the
-     * development site's 13,213 rows, a course of 19 questions and one of 9,497
-     * both took about 41 ms, which at 400,000 rows would be something like a
-     * second, paid by every course including an empty one.
-     *
-     * Finding the course's bank contexts first and giving the join an explicit
-     * list of them makes the optimiser start at
-     * `question_categories.contextid`, and the cost becomes the *course's* own
-     * questions: 0.3 ms for that 19-question course, 17 ms for one of 3,562 and
-     * 31 ms for one of 9,497, or roughly 3 to 5 µs a question plus a little per
-     * bank. A site reaching 400,000 questions does so by having more courses,
-     * not a bigger one, so a course keeps its own cost however large the site
-     * around it grows. What is left to watch is a single course holding a very
-     * large bank, which would be seconds rather than milliseconds.
-     *
-     * Collecting the contexts that actually hold categories, rather than every
-     * context under the course, also keeps the list proportional to the number
-     * of banks — 176 rather than 511 for the course measured — instead of to the
-     * number of activities.
-     *
-     * That is fast enough to run on each load of the question form, so the
-     * notes' suggestion of a session cache is not taken: a cache here would
-     * have to be invalidated whenever any question in the course was saved, and
-     * until it was, a prototype just used would be missing from the group named
-     * for the prototypes the course uses. The per-request memo below is enough,
-     * because a form builds its picker once.
-     *
-     * @param int $courseid the course.
-     * @return int[] the prototype ids, each once.
-     */
-    public function ids_used_in_course(int $courseid): array {
-        global $DB;
-
-        if (isset(self::$usedcache[$courseid])) {
-            return self::$usedcache[$courseid];
-        }
-
-        $context = \context_course::instance($courseid, IGNORE_MISSING);
-        if (!$context) {
-            return self::$usedcache[$courseid] = [];
-        }
-
-        $like = $DB->sql_like('ctx.path', ':path');
-        $bankcontexts = $DB->get_fieldset_sql("
-            SELECT DISTINCT qc.contextid
-              FROM {question_categories} qc
-              JOIN {context} ctx ON ctx.id = qc.contextid
-             WHERE ctx.id = :contextid OR $like", [
-            'contextid' => $context->id,
-            'path' => $DB->sql_like_escape($context->path) . '/%',
-        ]);
-
-        if (!$bankcontexts) {
-            return self::$usedcache[$courseid] = [];
-        }
-
-        [$insql, $params] = $DB->get_in_or_equal($bankcontexts, SQL_PARAMS_NAMED, 'ctx');
-        $ids = $DB->get_fieldset_sql("
-            SELECT DISTINCT o.prototypeid
-              FROM {question_categories} qc
-              JOIN {question_bank_entries} qbe ON qbe.questioncategoryid = qc.id
-              JOIN {question_versions} qv ON qv.questionbankentryid = qbe.id
-              JOIN {question_coderunner_options} o ON o.questionid = qv.questionid
-             WHERE qc.contextid $insql
-               AND o.prototypeid IS NOT NULL", $params);
-
-        return self::$usedcache[$courseid] = array_map('intval', $ids);
-    }
-
-    /**
-     * Forget the cached usage, so that a test or a long-running script sees a
-     * question saved since it last asked.
-     */
-    public static function reset_caches(): void {
-        self::$usedcache = [];
     }
 
     /**
