@@ -187,6 +187,41 @@ class prototype_repository {
     }
 
     /**
+     * The prototype with this uuid **in this scope**, and nowhere else.
+     *
+     * The strict counterpart of {@see find_one_by_uuid()}, and the difference
+     * matters: that one falls back to any course's copy, because a restore
+     * that cannot find the original would otherwise create a duplicate, and
+     * adopting a stranger's copy is the lesser harm there. An **import** has
+     * the opposite problem. Importing a library into course A and matching a
+     * copy that lives in course B would add a version to *B's* prototype --
+     * changing another course's library, and with it every question in B that
+     * resolves against it, from a page about A.
+     *
+     * Found on the development site by rendering the preview for a course that
+     * had neither prototype: it reported both as already here.
+     *
+     * @param string $uuid the uuid to match.
+     * @param int $courseid the course being imported into.
+     * @return prototype|null the prototype, or null if this scope has none.
+     */
+    public function find_in_scope_by_uuid(string $uuid, int $courseid): ?prototype {
+        if ($uuid === '') {
+            return null;
+        }
+
+        foreach ([$courseid, SITEID] as $scope) {
+            foreach ($this->find_by_uuid($uuid) as $candidate) {
+                if ((int) $candidate->courseid === (int) $scope) {
+                    return $candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The prototype of the given name that a course's questions resolve against.
      *
      * A name is unique among one course's prototypes and all site prototypes

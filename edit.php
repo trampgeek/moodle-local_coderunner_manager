@@ -26,7 +26,6 @@ use local_coderunner_manager\form\prototype_form;
 use local_coderunner_manager\output\history_table;
 use local_coderunner_manager\output\version_diff;
 use local_coderunner_manager\prototype_repository;
-use local_coderunner_manager\scope_picker;
 use qtype_coderunner\v6\override_set;
 use qtype_coderunner\v6\prototype_chain;
 use qtype_coderunner\v6\settings_form;
@@ -38,8 +37,10 @@ require_once($CFG->libdir . '/filelib.php');
 $id = optional_param('id', 0, PARAM_INT);
 $courseid = optional_param('courseid', 0, PARAM_INT);
 // The parent, either as a link's request to create a child of it or as the
-// menu's current choice on a reload. -1 says the page was given neither, which
-// is not the same as 0 — the author choosing *No parent*.
+// menu's current choice on a reload. The menu posts an empty value while it is
+// showing *Choose...*, which cleans to 0, so -1 is what says the page was
+// given no parent at all; the two differ to a prototype being created, which
+// starts from Site defaults until an author submits it without a parent.
 $parentid = optional_param('parentid', -1, PARAM_INT);
 $restore = optional_param('restore', 0, PARAM_INT);
 $publish = optional_param('publish', 0, PARAM_BOOL);
@@ -93,17 +94,12 @@ $PAGE->navbar->add(get_string('prototypelist', 'local_coderunner_manager'), $lis
 $PAGE->navbar->add($title);
 
 // What the prototype inherits: its parent chain, without the prototype itself.
-//
-// A submission that changed the *course* menu carries a parent from the scope
-// before it, so it says nothing about what this prototype inherits: the menu
-// had been showing *No parent* while the author was looking at a course that
-// does not hold the parent, and reading that as a deliberate choice would make
-// the prototype a root the next time it was saved. The stored parent stands
-// until the author answers the question this scope is asking.
-$submittedparent = scope_picker::scope_changed_for(prototype_form::PARENT_COURSE_FIELD) ? -1 : $parentid;
+// An unanswered menu leaves the stored parent standing, which is what an
+// author who has merely glanced at another course's library submits; see
+// prototype_form::effective_parentid().
 $effectiveparent = prototype_form::effective_parentid(
     $prototype,
-    $submittedparent < 0 ? null : $submittedparent,
+    $parentid < 0 ? null : $parentid,
     $repo->site_defaults()?->id
 );
 $inherited = $effectiveparent

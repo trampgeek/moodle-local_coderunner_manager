@@ -113,7 +113,11 @@ echo html_writer::div(
     html_writer::link(
         new moodle_url('/local/coderunner_manager/edit.php', ['courseid' => $courseid ?: SITEID]),
         get_string('newprototype', 'local_coderunner_manager'),
-        ['class' => 'btn btn-primary']
+        ['class' => 'btn btn-primary me-1']
+    ) . html_writer::link(
+        new moodle_url('/local/coderunner_manager/import.php', $courseid ? ['courseid' => $courseid] : []),
+        get_string('importprototypes', 'local_coderunner_manager'),
+        ['class' => 'btn btn-secondary']
     ),
     'mb-3'
 );
@@ -169,6 +173,106 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
 }
 
 /**
+ * The export checkbox for one prototype.
+ *
+ * **Governed by what a recipient needs, not by what the viewer may edit**
+ * (decision 36). Export is a read, and the content is already readable: the
+ * editor shows a non-admin every field of a site prototype, and a question
+ * export already carries the definitions of non-builtin site prototypes. So
+ * this does not ask `may_edit()`, and a teacher can send a colleague on
+ * CodeRunner 5 the site-level type their questions need -- the RoboTurtle case
+ * that raised prototype export in the first place.
+ *
+ * *Site defaults* is the one row that cannot be exported, because flattened it
+ * arrives as a question type called *Site defaults* that defines nothing. Its
+ * box is **disabled rather than absent**, which is the Delete button's rule on
+ * this page too: an author looking for the action finds it and is told why.
+ *
+ * **Every other row is in one toggle group, so *Select all* selects all of
+ * them.** It briefly left the built-ins out, on the grounds that no recipient
+ * needs them and they are the bulk of a library's bytes; the author's ruling
+ * on 27 November is that a *Select all* which visibly does not is worse than
+ * the bytes -- the common export is one prototype and its descendants, whole
+ * libraries are rare, and a control that behaves as it does everywhere else in
+ * Moodle is worth more than an optimisation for a case almost nobody meets.
+ *
+ * @param prototype $prototype the prototype.
+ * @return string the rendered cell.
+ */
+function prototype_export_cell(prototype $prototype): string {
+    if ($prototype->issitedefaults) {
+        return html_writer::empty_tag('input', [
+            'type' => 'checkbox',
+            'disabled' => 'disabled',
+            'class' => 'form-check-input',
+            'title' => get_string('exportnotsitedefaults', 'local_coderunner_manager'),
+            'aria-label' => get_string('exportnotsitedefaults', 'local_coderunner_manager'),
+        ]);
+    }
+
+    return html_writer::empty_tag('input', [
+        'type' => 'checkbox',
+        'name' => 'ids[]',
+        'value' => $prototype->id,
+        'class' => 'form-check-input',
+        'data-action' => 'toggle',
+        'data-toggle' => 'target',
+        'data-togglegroup' => 'export',
+        'aria-label' => get_string('exportthis', 'local_coderunner_manager', $prototype->name),
+    ]);
+}
+
+/**
+ * Why a row sits at the top of the table rather than inside the tree.
+ *
+ * **Only the remotely-parented roots get this**, and that asymmetry is the
+ * point: every other row's parent is the row it is indented under, so naming
+ * it would repeat what the indentation already says, and a column of its own
+ * would be empty everywhere else. These rows are the ones with nothing above
+ * them to explain them -- their parent is in another course and cannot be
+ * drawn here -- so they are the ones that need telling.
+ *
+ * The parent is named in plain text rather than linked, because the viewer may
+ * well not be able to open it; the library learnt that lesson once already,
+ * when every row offered a link that answered "you don't have permission"
+ * ({@see prototype_candidates::may_edit()}).
+ *
+ * Its course is named whatever the viewer's rights there, which is the answer
+ * the editor's own scope menu already gives for exactly this case
+ * ({@see \local_coderunner_manager\scope_picker::scopes()}), so the two
+ * places cannot disagree about the same parent.
+ *
+ * @param prototype $prototype the prototype.
+ * @return string the rendered note, or an empty string where there is none.
+ */
+function prototype_remote_parent_note(prototype $prototype): string {
+    global $repo;
+
+    $parentid = $prototype->parentid();
+    if ($parentid === null) {
+        return '';
+    }
+
+    $parent = $repo->get($parentid);
+    if ($parent === null) {
+        // A parent that has gone. Deletion refuses a prototype with children,
+        // so this is dangling data rather than something an author did, and
+        // the row says what it can: that the parent is not here.
+        return '';
+    }
+
+    $course = (new prototype_candidates())->course_name((int) $parent->courseid);
+    $note = $course === ''
+        ? get_string('inheritsfromelsewhere', 'local_coderunner_manager', s($parent->name))
+        : get_string('inheritsfromcourse', 'local_coderunner_manager', (object) [
+            'parent' => s($parent->name),
+            'course' => s($course),
+        ]);
+
+    return html_writer::tag('small', $note, ['class' => 'text-muted ms-2 fw-normal']);
+}
+
+/**
  * The actions cell for one prototype: an export and a Delete button, the
  * latter disabled with its reason where the prototype may not go.
  *
@@ -177,11 +281,11 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
  * simply does not offer one. The reason comes from the repository, which is
  * also what refuses the deletion itself, so the two agree.
  *
- * The export writes this prototype's whole chain as a single CodeRunner 5
- * question type, which is the only place flattening happens: a question export
- * never flattens, because a flattened question withholds nothing from its
- * recipient (decision 33). It is offered beside Delete because a prototype is
- * what a 5.x site cannot build for itself.
+ * **Export is not here**, though it used to be. It is a checkbox on the row
+ * and one button under the table (decision 36), because a per-row button can
+ * only ever send one prototype and a library is sent as a library. Its old
+ * place here is also what gated it on `may_edit()`, by way of the early
+ * return above -- reasoning meant for deletion, applied to a read.
  *
  * @param prototype $prototype the prototype.
  * @param array $counts its question and child counts, already gathered.
@@ -189,7 +293,7 @@ function prototype_name_cell(prototype $prototype, int $depth): string {
  * @return string the rendered cell.
  */
 function prototype_actions_cell(prototype $prototype, array $counts, moodle_url $pageurl): string {
-    global $repo;
+    global $repo, $OUTPUT;
 
     if (!prototype_candidates::may_edit($prototype)) {
         // Not theirs to change, so not theirs to delete; the row still shows
@@ -197,38 +301,38 @@ function prototype_actions_cell(prototype $prototype, array $counts, moodle_url 
         return '';
     }
 
-    // Not offered for Site defaults, which is the root every chain stands on
-    // rather than a question type: flattened into a CodeRunner 5 prototype
-    // question it would arrive there as a type called "Site defaults" that
-    // defines nothing.
-    $export = $prototype->issitedefaults ? '' : html_writer::link(
-        new moodle_url('/local/coderunner_manager/exportlegacy.php', [
-            'id' => $prototype->id,
-            'courseid' => $pageurl->param('courseid') ?: 0,
-            'sesskey' => sesskey(),
-        ]),
-        get_string('exportlegacy', 'local_coderunner_manager'),
-        [
-            'class' => 'btn btn-sm btn-outline-secondary me-1',
-            'title' => get_string('exportlegacy_help', 'local_coderunner_manager'),
-        ]
-    );
-
     $label = get_string('deleteprototype', 'local_coderunner_manager');
     $reason = $repo->undeletable_reason($prototype, $counts);
 
     if ($reason !== null) {
-        return $export . html_writer::tag('span', $label, [
-            'class' => 'btn btn-sm btn-outline-danger disabled',
-            'aria-disabled' => 'true',
-            'title' => get_string('deleteundeletable', 'local_coderunner_manager', $reason),
-        ]);
+        // A faded icon, not a link, and not a disabled button: the pair of
+        // outline buttons this replaced differed by a shade an author could
+        // not see, which the author said on 27 November. Red against grey at
+        // half opacity is a difference nobody has to look for, and it does not
+        // rely on colour alone, since the live one is a link and this is not.
+        return html_writer::tag(
+            'span',
+            $OUTPUT->pix_icon('t/delete', '', 'moodle', ['aria-hidden' => 'true']),
+            [
+                'class' => 'text-muted opacity-50 mx-1 p-1 d-inline-block',
+                'title' => get_string('deleteundeletable', 'local_coderunner_manager', $reason),
+                'aria-label' => get_string('deleteundeletable', 'local_coderunner_manager', $reason),
+                'role' => 'img',
+            ]
+        );
     }
 
-    return $export . html_writer::link(
+    // The icon and class core's own question bank deletes with
+    // (`qbank_deletequestion\delete_action`: `t/delete`, then `text-danger`),
+    // through the helper it goes through, so this row looks like every other
+    // table of actions in Moodle and inherits whatever a theme does to them.
+    // The word *Delete* is the link's accessible name rather than its text,
+    // which is what `action_icon()` does with it.
+    return $OUTPUT->action_icon(
         new moodle_url($pageurl, ['delete' => $prototype->id]),
-        $label,
-        ['class' => 'btn btn-sm btn-outline-danger']
+        new pix_icon('t/delete', $label),
+        null,
+        ['class' => 'text-danger']
     );
 }
 
@@ -257,6 +361,14 @@ function print_prototype_row(
     $version = $prototype->currentversion;
     $label = prototype_name_cell($prototype, $depth);
 
+    // A root with a parent is one whose parent is not in this listing: it is
+    // in another course, so this row stands outside the tree and says why.
+    // Only a root can be in that position -- anything whose parent is here is
+    // printed under it, by construction -- so the depth is the test.
+    if ($depth === 0) {
+        $label .= prototype_remote_parent_note($prototype);
+    }
+
     // Built-ins are created at site scope and stay there, even the stock copy
     // a split leaves behind, so saying so in the scope cell costs nothing and
     // a column of its own would be empty for every other row. Site defaults is
@@ -272,6 +384,7 @@ function print_prototype_row(
     $counts = $usage[$prototype->id] ?? ['questions' => 0, 'children' => 0, 'childrenincourse' => 0];
 
     echo html_writer::start_tag('tr');
+    echo html_writer::tag('td', prototype_export_cell($prototype), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $label, ['class' => 'text-nowrap']);
     echo html_writer::tag('td', s($scope), ['class' => 'text-nowrap']);
     echo html_writer::tag('td', $version ? $version->version : '-');
@@ -311,8 +424,44 @@ function print_prototype_row(
     }
 }
 
+// The table is a form, because the export acts on a selection of its rows.
+// `core/checkbox-toggleall` drives the two links below: a non-checkbox toggler
+// selects or clears its group according to `data-checkall`, so *Select all* and
+// *Select none* need no script of this plugin's. Registered unconditionally,
+// since the module binds one delegated listener per page however many groups
+// are on it.
+$PAGE->requires->js_call_amd('core/checkbox-toggleall', 'init');
+
+echo html_writer::start_tag('form', [
+    'method' => 'post',
+    'action' => (new moodle_url('/local/coderunner_manager/export.php'))->out(false),
+]);
+echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+echo html_writer::empty_tag('input', [
+    'type' => 'hidden',
+    'name' => 'courseid',
+    'value' => $courseid ?: 0,
+]);
+
+// The togglers. *Select all* means every row that has a box, which is how the
+// control behaves everywhere else in Moodle and so needs no explaining.
+$togglers = html_writer::link('#', get_string('selectall', 'local_coderunner_manager'), [
+    'data-action' => 'toggle',
+    'data-toggle' => 'toggler',
+    'data-togglegroup' => 'export',
+    'data-checkall' => 1,
+]);
+$togglers .= ' · ' . html_writer::link('#', get_string('selectnone', 'local_coderunner_manager'), [
+    'data-action' => 'toggle',
+    'data-toggle' => 'toggler',
+    'data-togglegroup' => 'export',
+    'data-checkall' => 0,
+]);
+echo html_writer::div($togglers, 'mb-2');
+
 echo html_writer::start_tag('table', ['class' => 'table table-sm table-striped']);
 echo html_writer::start_tag('tr');
+echo html_writer::tag('th', '', ['class' => 'text-nowrap']);
 foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children', 'summary', 'actions'] as $header) {
     $text = get_string('header' . $header, 'local_coderunner_manager');
     if ($header === 'children') {
@@ -328,9 +477,23 @@ foreach (['prototype', 'scope', 'version', 'fieldsset', 'questions', 'children',
     echo html_writer::tag('th', $text);
 }
 echo html_writer::end_tag('tr');
-foreach ($childrenof[0] ?? [] as $root) {
+foreach (prototype_candidates::roots_in_order($childrenof) as $root) {
     print_prototype_row($root, $childrenof, $usage, $coursenames, (int) $courseid);
 }
 echo html_writer::end_tag('table');
+
+// One button, not a menu: there is one export file and both CodeRunner
+// versions read it (decision 36). The help carries what the old per-row
+// button's tooltip said and is still true -- a CodeRunner 5 recipient must
+// import the prototypes before the questions that use them.
+echo html_writer::div(
+    html_writer::empty_tag('input', [
+        'type' => 'submit',
+        'value' => get_string('exportselected', 'local_coderunner_manager'),
+        'class' => 'btn btn-secondary',
+    ]) . $OUTPUT->help_icon('exportselected', 'local_coderunner_manager'),
+    'mb-3'
+);
+echo html_writer::end_tag('form');
 
 echo $OUTPUT->footer();

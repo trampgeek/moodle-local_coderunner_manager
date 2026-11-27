@@ -124,20 +124,54 @@ class prototype_form extends \moodleform {
         // menus is the manager's own component, so the two forms cannot drift
         // apart, and a prototype may inherit from another course's prototype
         // exactly as a question may be built on one (design section 7).
-        [$elements, $separators] = $this->parent_picker($exclude)->elements(
-            $mform,
-            (int) $this->_customdata['courseid'],
-            $this->_customdata['parentid'] ?: null
-        );
-        $mform->addGroup(
-            $elements,
-            self::PARENT_GROUP,
-            get_string('parentprototype', 'local_coderunner_manager'),
-            $separators,
-            false
-        );
-        $mform->setType(self::PARENT_FIELD, PARAM_INT);
-        $mform->addHelpButton(self::PARENT_GROUP, 'parentprototype', 'local_coderunner_manager');
+        //
+        // **Site defaults has no parent and cannot be given one**, since it is
+        // the root of every chain (design section 6), so it is told rather than
+        // asked. Its menu would in any case have been empty: every other
+        // prototype descends from it and is excluded as a descendant.
+        if ($this->is_site_defaults()) {
+            $mform->addElement(
+                'static',
+                self::PARENT_FIELD . '_root',
+                get_string('parentprototype', 'local_coderunner_manager'),
+                get_string('parentisroot', 'local_coderunner_manager')
+            );
+        } else {
+            [$elements, $separators] = $this->parent_picker($exclude)->elements(
+                $mform,
+                (int) $this->_customdata['courseid'],
+                $this->_customdata['parentid'] ?: null
+            );
+            $mform->addGroup(
+                $elements,
+                self::PARENT_GROUP,
+                get_string('parentprototype', 'local_coderunner_manager'),
+                $separators,
+                false
+            );
+            $mform->setType(self::PARENT_FIELD, PARAM_INT);
+            $mform->addHelpButton(self::PARENT_GROUP, 'parentprototype', 'local_coderunner_manager');
+
+            // Every prototype but Site defaults inherits from something, so an
+            // unchosen parent is an unanswered required field.
+            //
+            // `addGroupRule()` naming the element, not `addRule()` on the
+            // group: a rule on a group is handed the group's whole value,
+            // which with two menus in it is an array, and
+            // `HTML_QuickForm_Rule_Required` casts that to the string "Array"
+            // and passes however empty the prototype menu is. And this rule
+            // does its work in the browser only, where the value is still ''
+            // when the JavaScript sees it; `setType()` above cleans the
+            // submitted placeholder to 0 server-side, and "0" is a non-empty
+            // string, so the refusal that matters is in `validation()`. The
+            // question form's picker carries the same pair for the same
+            // reason, which is where this was measured.
+            $mform->addGroupRule(self::PARENT_GROUP, [
+                self::PARENT_FIELD => [
+                    [get_string('parentrequired', 'local_coderunner_manager'), 'required', null, 'client'],
+                ],
+            ]);
+        }
 
         // The menu's reload button is registered here: unconditionally, so that
         // nothing about the request can leave a press unrecognised, and before
@@ -255,12 +289,15 @@ class prototype_form extends \moodleform {
         // The parent the page worked out, which is the submitted one on a
         // reload and the stored one otherwise. Set for a new prototype as well
         // as an existing one: a form that showed Site defaults' values as
-        // inherited while the menu read "No parent" saved the second.
+        // inherited while its menu read *Choose...* would be describing a
+        // chain the author had not been shown.
         //
         // The default is set *and* settled in definition_after_data(), because
         // a default loses to a submitted value and on a reload the submission
         // is one render out of date; see scope_picker::settle().
-        $mform->setDefault(self::PARENT_FIELD, $this->_customdata['parentid'] ?? 0);
+        if (!$this->is_site_defaults()) {
+            $mform->setDefault(self::PARENT_FIELD, $this->_customdata['parentid'] ?: '');
+        }
 
         if ($prototype) {
             $mform->setDefault('name', $prototype->name);
@@ -407,11 +444,25 @@ class prototype_form extends \moodleform {
      * calls to work the answer out before building the form; by here it is
      * settled and arrives as customdata.
      *
-     * @return int|null the parent prototype id, or null for a root prototype.
+     * @return int|null the parent prototype id, or null when there is none:
+     *      Site defaults, or a menu still on *Choose...*.
      */
     protected function form_parentid(): ?int {
         $parentid = (int) ($this->_customdata['parentid'] ?? 0);
         return $parentid ?: null;
+    }
+
+    /**
+     * Whether the prototype being edited is Site defaults.
+     *
+     * The one prototype with no parent, and so the one the parent control is
+     * not drawn for. Creating a prototype is never this: there is only ever
+     * one, and the installer makes it.
+     *
+     * @return bool true for Site defaults.
+     */
+    protected function is_site_defaults(): bool {
+        return !empty($this->_customdata['prototype']?->issitedefaults);
     }
 
     /**
@@ -438,26 +489,44 @@ class prototype_form extends \moodleform {
     /**
      * The parent whose chain the form shows as inherited.
      *
-     * The submission wins when there is one, so that the no-submit reload
-     * after a change of parent answers for the new parent rather than for what
-     * is stored. A prototype being created inherits from Site defaults unless
-     * the author says otherwise, which is where design section 6 puts the root
-     * of every chain.
+     * A submitted parent wins, so that the no-submit reload after a change of
+     * parent answers for the new parent rather than for what is stored. A
+     * prototype being created inherits from Site defaults unless the author
+     * says otherwise, which is where design section 6 puts the root of every
+     * chain.
+     *
+     * **Zero is nothing chosen, not *no parent*,** and is distinct from null:
+     * zero is a menu that was submitted showing *Choose...*, null a page that
+     * was not given a parent at all.
+     *
+     * An existing prototype keeps its stored parent through either, because
+     * *Choose...* is also what the menu shows an author who is looking at a
+     * course that does not hold the parent. Without that, a glance at another
+     * course's library and back read as a cleared parent: the form rebuilt
+     * itself inheriting from nothing, and the menu the author had not touched
+     * showed *Choose...* beside it. The question form reads its own menu the
+     * same way ({@see \qtype_coderunner\edit_coderunner_form::chosen_prototypeid()}).
+     *
+     * A prototype being created starts from Site defaults, which is where
+     * design section 6 puts the root of every chain — but only until it is
+     * submitted. An author who submits one with nothing chosen is refused by
+     * `validation()`, and the menu beside that refusal has to read
+     * *Choose...*, not the value the first render offered them.
      *
      * @param prototype|null $prototype the prototype being edited, or null
      *      when creating one.
-     * @param int|null $submitted the parent the form submitted, or null when
-     *      the form has not been submitted. Zero means *No parent*.
+     * @param int|null $submitted the parent the form submitted: zero when its
+     *      menu chose none, null when the page was given no parent at all.
      * @param int|null $sitedefaultsid the Site defaults prototype's id.
-     * @return int|null the parent's id, or null for a root.
+     * @return int|null the parent's id, or null where there is none to show.
      */
     public static function effective_parentid(
         ?prototype $prototype,
         ?int $submitted,
         ?int $sitedefaultsid
     ): ?int {
-        if ($submitted !== null) {
-            return $submitted ?: null;
+        if ($submitted) {
+            return $submitted;
         }
         if ($prototype) {
             // The draft's parent when there is a draft, since that is the
@@ -465,27 +534,22 @@ class prototype_form extends \moodleform {
             $editing = $prototype->draftversion ?? $prototype->currentversion;
             return $editing?->parentid;
         }
-        return $sitedefaultsid;
+        return $submitted === null ? $sitedefaultsid : null;
     }
 
     /**
      * The shared control, configured for a prototype's parent.
      *
-     * *No parent* rather than *Choose...*: a prototype with no parent is a
-     * root, which is a real answer and the one every built-in gives, where a
-     * question with no prototype is an unanswered required field.
+     * *Choose...*, exactly as the question form's: an unchosen parent is an
+     * unanswered required field, not an answer. It read *None (a root
+     * prototype)* until 27 November, which was a real choice carrying a real
+     * value and the only way a second root was ever created.
      *
      * @param int[] $exclude the prototypes this one may not inherit from.
      * @return scope_picker the pair of menus.
      */
     protected function parent_picker(array $exclude): scope_picker {
-        return new scope_picker(
-            self::PARENT_FIELD,
-            self::PARENT_COURSE_FIELD,
-            $exclude,
-            get_string('noparent', 'local_coderunner_manager'),
-            0
-        );
+        return new scope_picker(self::PARENT_FIELD, self::PARENT_COURSE_FIELD, $exclude);
     }
 
     /**
@@ -494,7 +558,7 @@ class prototype_form extends \moodleform {
      * See {@see scope_picker::settle()} for why the defaults cannot do it: on
      * a no-submit reload formslib fills every element from a submission that
      * is one render out of date, so a parent in the course the author has just
-     * come back to would read as *No parent*.
+     * come back to would read as *Choose...*.
      */
     public function definition_after_data() {
         parent::definition_after_data();
@@ -543,18 +607,32 @@ class prototype_form extends \moodleform {
             $errors['name'] = get_string($clash, 'local_coderunner_manager', $data['name']);
         }
 
-        // A parent in another course needs the capability there, and the check
-        // is in the code rather than only in the menu: a form can be submitted
-        // without having been built. Keeping a parent the prototype already
-        // has is always allowed, which is `may_choose()`'s rule and the same
-        // one the question form applies to a question's prototype -- otherwise
-        // an author with rights only in their own course could not edit a
-        // child of another course's prototype at all.
-        $chosen = empty($data[self::PARENT_FIELD]) ? null : (int) $data[self::PARENT_FIELD];
-        $previous = $this->_customdata['prototype'] ?? null;
-        $previous = $previous ? ($previous->draftversion ?? $previous->currentversion)?->parentid : null;
-        if (!(new prototype_candidates())->may_choose($chosen, $previous === null ? null : (int) $previous)) {
-            $errors[self::PARENT_GROUP] = get_string('parentnotallowed', 'local_coderunner_manager');
+        // Every prototype but Site defaults inherits from something, and the
+        // refusal is here rather than in the required rule because `setType()`
+        // has already cleaned the unchosen menu's '' to 0, which that rule
+        // reads as answered. A prototype that reaches this with no parent is
+        // either a form submitted without having been built or an author who
+        // pressed Save with the menu untouched.
+        //
+        // A parent in another course needs the capability there, and that
+        // check is in the code rather than only in the menu for the same
+        // reason. Keeping a parent the prototype already has is always
+        // allowed, which is `may_choose()`'s rule and the same one the
+        // question form applies to a question's prototype -- otherwise an
+        // author with rights only in their own course could not edit a child
+        // of another course's prototype at all.
+        //
+        // Site defaults is the exception to both: it was told rather than
+        // asked, so there is no control to anchor an error to.
+        if (!$this->is_site_defaults()) {
+            $chosen = empty($data[self::PARENT_FIELD]) ? null : (int) $data[self::PARENT_FIELD];
+            $previous = $this->_customdata['prototype'] ?? null;
+            $previous = $previous ? ($previous->draftversion ?? $previous->currentversion)?->parentid : null;
+            if ($chosen === null) {
+                $errors[self::PARENT_GROUP] = get_string('parentrequired', 'local_coderunner_manager');
+            } else if (!(new prototype_candidates())->may_choose($chosen, $previous === null ? null : (int) $previous)) {
+                $errors[self::PARENT_GROUP] = get_string('parentnotallowed', 'local_coderunner_manager');
+            }
         }
 
         return $errors + $this->json_errors($data);

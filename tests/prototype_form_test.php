@@ -119,6 +119,76 @@ final class prototype_form_test extends \advanced_testcase {
     }
 
     /**
+     * A prototype with no parent chosen is refused.
+     *
+     * Design section 6 puts Site defaults at the root of every chain, and the
+     * menu offered *None (a root prototype)* until 27 November, which was the
+     * only way a second root was ever created: nothing else makes one, and a
+     * root inherits none of the values an administrator set in Site defaults,
+     * falling back to the registry's compiled-in defaults instead. The option
+     * is gone, and the refusal is here because a form can be submitted without
+     * having been built.
+     */
+    public function test_a_prototype_with_no_parent_is_refused(): void {
+        $form = $this->build_form(null);
+
+        $errors = $form->validation([
+            'id' => 0,
+            'name' => 'a_new_one',
+            'courseid' => SITEID,
+            prototype_form::PARENT_FIELD => 0,
+        ], []);
+
+        $this->assertSame(
+            get_string('parentrequired', 'local_coderunner_manager'),
+            $errors[prototype_form::PARENT_GROUP] ?? null,
+            'A prototype was allowed to be saved as a second root of the forest.'
+        );
+    }
+
+    /**
+     * Site defaults is told it has no parent rather than asked for one.
+     *
+     * It is the one prototype at the root of a chain, so the control has
+     * nothing to offer it -- its own menu would be empty in any case, since
+     * every other prototype descends from it and is excluded as a descendant
+     * -- and the required rule above must not stand in the way of editing it.
+     */
+    public function test_site_defaults_is_not_asked_for_a_parent(): void {
+        $defaults = $this->repo->create(
+            'Site defaults',
+            SITEID,
+            new override_set([], 'Site defaults'),
+            null,
+            '',
+            '',
+            true,
+            '',
+            true
+        );
+
+        $form = $this->build_form($this->repo->get_or_fail($defaults->id));
+        $mform = $this->quickform($form);
+
+        $this->assertFalse(
+            $mform->elementExists(prototype_form::PARENT_GROUP),
+            'Site defaults was offered a parent menu.'
+        );
+        $this->assertTrue($mform->elementExists(prototype_form::PARENT_FIELD . '_root'));
+
+        $errors = $form->validation([
+            'id' => $defaults->id,
+            'name' => 'Site defaults',
+            'courseid' => SITEID,
+        ], []);
+        $this->assertArrayNotHasKey(
+            prototype_form::PARENT_GROUP,
+            $errors,
+            'Site defaults could not be saved for want of the parent it cannot have.'
+        );
+    }
+
+    /**
      * A parent in a course the author may not build on is refused on save, and
      * the one the prototype already has is always allowed.
      *
@@ -386,21 +456,37 @@ final class prototype_form_test extends \advanced_testcase {
             prototype_form::effective_parentid($child, $other->id, null),
             'A change of parent was ignored in favour of the stored one.'
         );
-        $this->assertNull(
+        $this->assertSame(
+            $parent->id,
             prototype_form::effective_parentid($child, 0, null),
-            '*No parent* was read as "nothing submitted".'
+            'An unanswered menu should leave the stored parent standing: it is what an '
+                . "author submits after a look at another course's library."
         );
         $this->assertSame(
             $parent->id,
             prototype_form::effective_parentid($child, null, null),
             'A form that was not submitted should answer for the stored parent.'
         );
+
+        // A prototype being created is the one case where the two differ: it
+        // starts from Site defaults, but an author who submits it with nothing
+        // chosen is refused, and the menu beside that refusal has to read
+        // *Choose...* rather than the value the first render offered.
+        $this->assertSame(
+            $other->id,
+            prototype_form::effective_parentid(null, null, $other->id),
+            'A new prototype should open on Site defaults.'
+        );
+        $this->assertNull(
+            prototype_form::effective_parentid(null, 0, $other->id),
+            'A new prototype submitted with no parent should show none.'
+        );
     }
 
     /**
      * A prototype being created inherits from Site defaults unless the author
      * says otherwise, which is where design section 6 puts the root of every
-     * chain — and the menu says so, rather than reading *No parent* beside a
+     * chain — and the menu says so, rather than reading *Choose...* beside a
      * form showing Site defaults' values as inherited.
      */
     public function test_a_new_prototype_starts_from_site_defaults(): void {

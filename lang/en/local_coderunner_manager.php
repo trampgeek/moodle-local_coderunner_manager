@@ -58,6 +58,8 @@ $string['taskinstallprototypes'] = 'Install CodeRunner question prototypes';
 $string['noprototypesyet'] = 'No prototypes have been recorded yet. They are created by the "Install CodeRunner question prototypes" task, which runs on cron after an install or upgrade.';
 $string['prototypelist'] = 'CodeRunner prototypes';
 $string['scopesite'] = 'Site';
+$string['selectall'] = 'Select all';
+$string['selectnone'] = 'Select none';
 $string['prototypehasquestions'] = 'Prototype "{$a->name}" cannot be deleted because {$a->count} question(s) use it.';
 $string['prototypeinuse'] = 'Prototype "{$a}" cannot be deleted because other prototypes derive from it.';
 $string['prototypenotfound'] = 'There is no CodeRunner prototype with id {$a}.';
@@ -66,10 +68,47 @@ $string['commitmessage_help'] = 'A short note saying what this version changes a
 $string['documentation'] = 'Documentation';
 $string['documentation_help'] = 'The guidance question authors see when they choose this prototype. This replaces the question text of a CodeRunner 5 prototype question.';
 $string['editprototype'] = 'Edit prototype: {$a}';
+$string['exportnotsitedefaults'] = 'Site defaults cannot be exported: it is the root every chain stands on rather than a question type, and on its own it defines nothing.';
+$string['exportfilename'] = 'coderunner_prototypes_{$a}';
+$string['exportfilenamenocourse'] = 'coderunner_prototypes';
+$string['exportnothingselected'] = 'No prototypes were selected, so there was nothing to export.';
+$string['exportselected'] = 'Export selected';
+$string['exportselected_help'] = 'Downloads the selected prototypes as a single Moodle XML file.
+
+A CodeRunner 6 site imports that file through this page. A CodeRunner 5 site imports it through Moodle\'s own question import, where each prototype arrives as a question type with everything it inherits resolved into it -- so **import it before the questions that use it**, or those questions will refuse to run.';
+$string['exportthis'] = 'Select {$a} for export';
 $string['identity'] = 'Identity';
+$string['importaction_create'] = 'New';
+$string['importaction_refuse'] = 'Refused';
+$string['importaction_unchanged'] = 'Unchanged';
+$string['importaction_version'] = 'New version';
+$string['importconfirmbutton'] = 'Import';
+$string['importdone'] = 'Import finished: {$a->created} added, {$a->versioned} updated, {$a->unchanged} already up to date.';
+$string['importfile'] = 'Prototype file';
+$string['importfile_help'] = 'A Moodle XML file written by the <em>Export selected</em> button on the prototype library page, here or on another site.
+
+A file of questions will not do: import that through Moodle\'s own question import instead.';
+$string['importfilegone'] = 'The uploaded file is no longer available. Please choose it again.';
+$string['importheaderaction'] = 'What will happen';
+$string['importheaderfile'] = 'In the file';
+$string['importheaderhere'] = 'Here';
+$string['importnothere'] = 'Not on this site';
+$string['importignoringbuiltin'] = 'The file also names one built-in question type, which every CodeRunner site already has. It is left alone.';
+$string['importignoringbuiltins'] = 'The file also names {$a} built-in question types, which every CodeRunner site already has. They are left alone.';
+$string['importplanintro'] = 'Nothing has been changed yet. This is what importing the file would do:';
+$string['importpreviewbutton'] = 'Continue';
+$string['importproblem_builtins'] = 'That file holds only CodeRunner\'s built-in question types, which every CodeRunner site already has, so there is nothing to import here. The file is still useful for a site running CodeRunner 5 that lacks one of them -- import it there through Moodle\'s own question import.';
+$string['importproblem_nothing'] = 'That file contains no CodeRunner prototypes.';
+$string['importproblem_questions'] = 'That file contains questions rather than prototypes. Import it through Moodle\'s own question import, which will bring in any prototypes the questions need along with the questions themselves.';
+$string['importprototypes'] = 'Import prototypes';
+$string['importprototypes_intro'] = 'Adds the prototypes in an exported file to this library. A prototype already here is recognised by its identifier rather than its name, and the incoming content is added to it as a new version, so nothing is overwritten and the change can be undone from its history.';
+$string['importrefused'] = 'Nothing was imported. Resolve the problems above and try again -- importing part of a library would leave it in a state neither site has.';
+$string['importversion'] = 'Version {$a}';
+$string['inheritsfromcourse'] = 'inherits from {$a->parent} in {$a->course}';
+$string['inheritsfromelsewhere'] = 'inherits from {$a}, in another course';
 $string['invalidjson'] = 'Not valid JSON. Every question built on this prototype merges this document, so it has to be readable as it stands.';
 $string['newprototype'] = 'New prototype';
-$string['noparent'] = 'None (a root prototype)';
+$string['noparent'] = 'None';
 $string['scopecourse'] = 'Prototypes from';
 $string['scopefrom'] = 'From';
 $string['scopegroup_othercourse'] = 'Another course';
@@ -79,8 +118,12 @@ $string['scopeprototype'] = 'Prototype';
 $string['scopethiscourse'] = 'This course';
 $string['scopeuse'] = 'use';
 $string['parentprototype'] = 'Parent';
+$string['parentisroot'] = 'None: Site defaults is the root of every prototype chain.';
 $string['parentnotallowed'] = 'You do not have permission to inherit from that course\'s prototypes.';
-$string['parentprototype_help'] = 'The prototype this one builds on. Every field left un-overridden here takes its value from that prototype, or from whatever that prototype inherits in turn.';
+$string['parentprototype_help'] = 'The prototype this one builds on. Every field left un-overridden here takes its value from that prototype, or from whatever that prototype inherits in turn.
+
+Every prototype inherits from another, and the chain ends at the <em>Site defaults</em> prototype, which holds the values a question takes when nothing else sets them. Choose <em>Site defaults</em> itself for a prototype that starts afresh.';
+$string['parentrequired'] = 'Choose the prototype this one inherits from. Every prototype builds on another; choose Site defaults for one that starts afresh.';
 $string['parentreload'] = 'Reload with this parent';
 $string['prototypename'] = 'Name';
 $string['prototypename_help'] = 'The name authors see. It must be unique among the prototypes of this course and all site prototypes taken together, so that a course prototype can never shadow a site one.';
@@ -174,8 +217,6 @@ $string['supportfilesownheading'] = 'This prototype\'s own files';
 
 // Deleting a prototype, from the library page.
 $string['deleteprototype'] = 'Delete';
-$string['exportlegacy'] = 'Export for CodeRunner 5';
-$string['exportlegacy_help'] = 'Download this question type, with everything it inherits resolved into it, as a question type a CodeRunner 5 site can import. Import it there before the questions that use it.';
 
 $string['deleteprototypeconfirm'] = 'Delete the prototype "{$a->name}"?
 

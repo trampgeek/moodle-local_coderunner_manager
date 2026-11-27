@@ -48,6 +48,14 @@ namespace local_coderunner_manager;
  * row (the question form puts the chain's breadcrumb there), and what the
  * chosen value means.
  *
+ * **The leading option is *Choose...* in both**, and is not the caller's to
+ * configure. The editor's used to be *No parent*, a real answer carrying a
+ * real value, which made a prototype with no parent a second root of the
+ * forest; design section 6 puts Site defaults at the root of every chain, and
+ * nothing else ever created a root, so the option offered a shape the rest of
+ * the system does not produce. Site defaults is now the only prototype with no
+ * parent, and the editor does not draw this control for it at all.
+ *
  * The course menu is drawn **only where it would hold more than one entry**,
  * so an author with rights in one course sees a single menu, which is nearly
  * every author. *Site* is never one of its entries: the built-in prototypes
@@ -65,12 +73,6 @@ class scope_picker {
     /** @var int[] Prototype ids this picker must not offer. */
     private array $exclude;
 
-    /** @var string|null The label of a leading option, or null for *Choose...*. */
-    private ?string $rootlabel;
-
-    /** @var string|int The value that leading option carries. */
-    private string|int $rootvalue;
-
     /** @var prototype_candidates The scope rules. */
     private prototype_candidates $candidates;
 
@@ -81,10 +83,6 @@ class scope_picker {
      * @param int[] $exclude prototype ids to leave out, which is how the
      *      prototype editor keeps a prototype from inheriting from itself or
      *      from its own descendants.
-     * @param string|null $rootlabel the leading option's label. Null gives
-     *      *Choose...* with an empty value, which is an unanswered required
-     *      field; the editor passes *No parent*, which is a real choice.
-     * @param string|int $rootvalue the value that option carries.
      * @param prototype_candidates|null $candidates the scope rules, or a new
      *      set of them.
      */
@@ -92,15 +90,11 @@ class scope_picker {
         string $field,
         string $coursefield,
         array $exclude = [],
-        ?string $rootlabel = null,
-        string|int $rootvalue = '',
         ?prototype_candidates $candidates = null
     ) {
         $this->field = $field;
         $this->coursefield = $coursefield;
         $this->exclude = array_map('intval', $exclude);
-        $this->rootlabel = $rootlabel;
-        $this->rootvalue = $rootvalue;
         $this->candidates = $candidates ?? new prototype_candidates();
     }
 
@@ -144,62 +138,16 @@ class scope_picker {
             );
             $separators[] = '&nbsp;' . get_string('scopeuse', 'local_coderunner_manager') . '&nbsp;';
 
-            // Which scope this render is showing, so that the next submission
-            // can be read correctly; see scope_changed().
-            $elements[] = $mform->createElement('hidden', $this->coursefield . '_rendered', $scopeid);
-            $separators[] = '';
-
-            // Both fields are this component's, so it declares their types
+            // The course menu is this component's, so it declares the type
             // rather than leaving two callers to remember. The chosen
             // prototype's type stays the caller's: it is the value they save.
             $mform->setType($this->coursefield, PARAM_INT);
-            $mform->setType($this->coursefield . '_rendered', PARAM_INT);
         }
 
         $elements[] = $this->menu_element($mform, $this->optgroups($courseid, $selectedid, $scopeid));
         $separators[] = '&nbsp;&nbsp;';
 
         return [$elements, $separators];
-    }
-
-    /**
-     * Whether this submission came from a render of a *different* scope.
-     *
-     * **A caller whose leading option is a real answer has to ask.** The
-     * prototype editor's is *No parent*, which an author may mean; and it is
-     * also what the prototype menu shows them while they are looking at a
-     * course that does not hold the current parent. The two submissions are
-     * identical — `parentid` of 0 — so without this the parent of a prototype
-     * whose author merely glanced at another course's library would be read as
-     * deliberately cleared, and saving would silently make the prototype a
-     * root. Seen in the browser, which is the only place it shows.
-     *
-     * So the render records the scope it drew, and a submission from another
-     * scope is one whose prototype is stale by construction: the author
-     * changed the course menu, and whatever the prototype menu posted was the
-     * answer to the previous scope's question. The caller keeps what it had.
-     *
-     * The question form does not need to ask, because its leading option is an
-     * unanswered required field: a stale one cannot be saved and is refused,
-     * and what it falls back to is the question's stored prototype.
-     *
-     * @return bool true if the course menu changed in this submission.
-     */
-    public function scope_changed(): bool {
-        return self::scope_changed_for($this->coursefield);
-    }
-
-    /**
-     * The same question, asked by a page that has no picker to hand.
-     *
-     * @param string $coursefield the name of the course menu.
-     * @return bool true if the course menu changed in this submission.
-     */
-    public static function scope_changed_for(string $coursefield): bool {
-        $rendered = optional_param($coursefield . '_rendered', 0, PARAM_INT);
-        $submitted = optional_param($coursefield, 0, PARAM_INT);
-
-        return $rendered !== 0 && $submitted !== 0 && $rendered !== $submitted;
     }
 
     /**
@@ -215,6 +163,8 @@ class scope_picker {
      *
      * This settles the rendering only. What is saved is whatever the author
      * submits, and the caller's own validation decides whether that will do.
+     * A menu left on *Choose...* because the current value is in another scope
+     * says nothing about that value: both callers fall back to what is stored.
      *
      * @param \MoodleQuickForm $mform the form, with its data.
      * @param string $group the name of the group the elements are in.
@@ -231,19 +181,9 @@ class scope_picker {
 
         foreach ($mform->getElement($group)->getElements() as $element) {
             if ($element->getName() === $this->field) {
-                $element->setSelected((string) ($inscope ?? $this->rootvalue));
+                $element->setSelected((string) ($inscope ?? ''));
             } else if ($element->getName() === $this->coursefield) {
                 $element->setSelected((string) $scopeid);
-            } else if ($element->getName() === $this->coursefield . '_rendered') {
-                // Forced here for the same reason the menus are, and it is
-                // the whole point of the field: formslib fills a hidden
-                // element from the submission too, so the value created with
-                // it was overwritten by the scope of the render *before* this
-                // one. Two scope changes in a row then looked like none at
-                // all, and the parent the author had come back to was read as
-                // deliberately cleared. Found in the browser; the field was
-                // in the page and carrying the wrong number.
-                $element->setValue((string) $scopeid);
             }
         }
     }
@@ -392,7 +332,7 @@ class scope_picker {
      * @return object the form element.
      */
     private function menu_element(\MoodleQuickForm $mform, array $optgroups) {
-        $leading = [$this->rootvalue => $this->rootlabel ?? get_string('choosedots')];
+        $leading = ['' => get_string('choosedots')];
         $attributes = ['aria-label' => get_string('scopeprototype', 'local_coderunner_manager')];
 
         if (count($optgroups) <= 1) {
@@ -409,8 +349,8 @@ class scope_picker {
             );
         }
 
-        // The leading option is prepended as a group of its own rather than
-        // asked for through `selectgroups`' $showchoose, which does not work on
+        // *Choose...* is prepended as a group of its own rather than asked for
+        // through `selectgroups`' $showchoose, which does not work on
         // this path: its export_for_template() appends the entry to
         // $optionsgroups while rendering $optiongroups, so the option is
         // silently dropped and the browser selects the first real prototype. A

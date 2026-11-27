@@ -165,25 +165,27 @@ final class scope_picker_test extends \advanced_testcase {
      * @return scope_picker the picker.
      */
     private function parent_picker(array $exclude = []): scope_picker {
-        return new scope_picker('thing', 'thingcourse', $exclude, 'No parent', 0);
+        return new scope_picker('thing', 'thingcourse', $exclude);
     }
 
     /**
-     * The leading option is the caller's: a real answer for the editor, where
-     * a root prototype is a normal thing to be, and an unanswered required
-     * field for the question form, where a question must be built on
-     * something.
+     * The leading option is *Choose...* in both forms, and carries no value,
+     * so neither can save it.
+     *
+     * The prototype editor's used to be *No parent*, carrying a real 0, which
+     * made a prototype with no parent a second root of the forest where design
+     * section 6 puts Site defaults at the root of every chain. Site defaults is
+     * the only prototype without a parent, and the editor does not draw this
+     * control for it.
      */
-    public function test_the_leading_option_is_the_callers(): void {
+    public function test_the_leading_option_is_an_unanswered_field(): void {
         $this->make_prototype('python3', SITEID);
 
-        $editor = $this->build($this->parent_picker());
-        $this->assertSame('0', $this->values($editor)[0], 'No parent carries a real value.');
-        $this->assertSame('0', $this->selection($this->element($editor, 'thing')));
-
-        $question = $this->build(new scope_picker('thing', 'thingcourse'));
-        $this->assertSame('', $this->values($question)[0], 'Choose... carries no value.');
-        $this->assertSame('', $this->selection($this->element($question, 'thing')));
+        foreach ([$this->parent_picker(), new scope_picker('thing', 'thingcourse')] as $picker) {
+            $mform = $this->build($picker);
+            $this->assertSame('', $this->values($mform)[0], 'Choose... carries no value.');
+            $this->assertSame('', $this->selection($this->element($mform, 'thing')));
+        }
     }
 
     /**
@@ -263,28 +265,6 @@ final class scope_picker_test extends \advanced_testcase {
     }
 
     /**
-     * A submission from a render of another scope is recognised as one.
-     *
-     * The caller needs this where its leading option is a real answer: *No
-     * parent* submitted because the author changed course has to be told from
-     * *No parent* submitted because the author means it, and the two POSTs are
-     * otherwise identical.
-     */
-    public function test_a_submission_from_another_scope_is_recognised(): void {
-        $picker = $this->parent_picker();
-
-        $this->assertFalse($picker->scope_changed(), 'No render recorded, so nothing is stale.');
-
-        $_POST['thingcourse_rendered'] = (string) $this->course->id;
-        $_POST['thingcourse'] = (string) $this->course->id;
-        $this->assertFalse($picker->scope_changed(), 'The same scope is not a change.');
-
-        $other = $this->getDataGenerator()->create_course();
-        $_POST['thingcourse'] = (string) $other->id;
-        $this->assertTrue($picker->scope_changed());
-    }
-
-    /**
      * The row reads as a sentence: *From* ‹course› *use* ‹prototype›.
      *
      * The leading word is an element rather than a separator, because a
@@ -301,19 +281,10 @@ final class scope_picker_test extends \advanced_testcase {
             $names[] = $element->getName();
         }
 
-        $this->assertSame(
-            ['thingcourse_from', 'thingcourse', 'thingcourse_rendered', 'thing'],
-            $names
-        );
+        $this->assertSame(['thingcourse_from', 'thingcourse', 'thing'], $names);
         $this->assertSame(
             get_string('scopefrom', 'local_coderunner_manager'),
             $this->element($mform, 'thingcourse_from')->toHtml()
-        );
-        // The hidden field records the scope this render is showing, which is
-        // what makes a stale submission recognisable; see scope_changed().
-        $this->assertSame(
-            (string) $this->course->id,
-            (string) $this->element($mform, 'thingcourse_rendered')->getValue()
         );
     }
 }

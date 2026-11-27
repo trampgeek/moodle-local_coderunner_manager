@@ -297,9 +297,10 @@ class prototype_installer {
     /**
      * Snapshot the user-defined prototype questions in the question bank.
      *
-     * A prototype question becomes a root prototype holding the fields it
-     * supplied, at the scope of the course whose bank contains it, or at site
-     * scope when it lives in the front page's bank. Its question text becomes
+     * A prototype question becomes a prototype holding the fields it supplied,
+     * inheriting from Site defaults as every prototype does, at the scope of
+     * the course whose bank contains it, or at site scope when it lives in the
+     * front page's bank. Its question text becomes
      * its documentation. Its answer, test cases and global extra are dropped:
      * the first two have no meaning for a prototype and the third never had any
      * effect.

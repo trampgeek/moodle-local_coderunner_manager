@@ -404,6 +404,49 @@ final class prototype_candidates_test extends \advanced_testcase {
     }
 
     /**
+     * The remotely-parented roots are listed first, and alphabetically among
+     * themselves.
+     *
+     * Left to the listing's name order the two kinds of root interleave, so
+     * where a prototype's name happened to sort decided whether it came out as
+     * the first row of the library page or at depth 0 beneath the whole
+     * built-in tree. Measured in the browser: *aaa_remote_test* came first and
+     * *zzz_remote_test* last, with forty indented rows between them, and the
+     * second reads as a rendering fault rather than as a second root.
+     */
+    public function test_remotely_parented_roots_are_listed_first(): void {
+        $other = $this->getDataGenerator()->create_course();
+        $theirs = $this->make_prototype('theirs', (int) $other->id);
+
+        // Named either side of the true root, so that name order alone would
+        // put one of them above it and the other below.
+        $defaults = $this->make_prototype('Site defaults', (int) $this->course->id);
+        $first = $this->make_prototype('aaa_remote', (int) $this->course->id, $theirs->id);
+        $last = $this->make_prototype('zzz_remote', (int) $this->course->id, $theirs->id);
+        $child = $this->make_prototype('a_child', (int) $this->course->id, $defaults->id);
+
+        // The set the library page shows, in the name order it arrives in and
+        // without the other course's prototype.
+        $shown = [];
+        foreach ([$first, $child, $defaults, $last] as $prototype) {
+            $shown[$prototype->id] = $prototype;
+        }
+
+        $roots = prototype_candidates::roots_in_order(
+            prototype_candidates::children_by_parent($shown)
+        );
+
+        $this->assertSame(
+            [$first->id, $last->id, $defaults->id],
+            array_map(fn($prototype) => $prototype->id, $roots),
+            'The remotely-parented roots should come first, in name order, then the true root.'
+        );
+
+        // And the child stays off the list: it is drawn under its parent.
+        $this->assertNotContains($child->id, array_map(fn($prototype) => $prototype->id, $roots));
+    }
+
+    /**
      * A prototype whose parent is not in the set being shown is a root of it,
      * so a walk from the roots down cannot lose it.
      *

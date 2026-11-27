@@ -243,6 +243,41 @@ class prototype_candidates {
     }
 
     /**
+     * The roots of such a set, in the order a listing should show them.
+     *
+     * **Two kinds of root sit in that bucket**, and they are not the same
+     * thing. One has no parent at all, which on any real site means Site
+     * defaults, the root of every chain. The other has a parent that is
+     * simply not in the set: a subtree hanging off another course's
+     * prototype, which cannot be drawn inside this tree because its parent is
+     * not here to draw it under, and may not even be visible to this viewer.
+     *
+     * So the set is a forest, and the order decides how that reads. Left to
+     * the listing's own name order the two kinds interleave, and where a
+     * prototype's name happened to sort decided whether it came out as the
+     * first row of the page or at depth 0 beneath forty indented ones --
+     * measured on the development site, which is how it was noticed: a name
+     * sorting after *Site defaults* reads as a rendering fault rather than as
+     * a second root. The remotely-parented ones go first, together, because
+     * they are what their author is working on and the alternative is a
+     * scroll past the whole built-in tree to reach them.
+     *
+     * Name order within each part, which is the order the set arrives in.
+     *
+     * @param array $childrenof the buckets, as {@see children_by_parent()}
+     *      returns them.
+     * @return prototype[] the roots, remotely-parented ones first.
+     */
+    public static function roots_in_order(array $childrenof): array {
+        $roots = $childrenof[0] ?? [];
+
+        return array_merge(
+            array_filter($roots, fn($prototype) => $prototype->parentid() !== null),
+            array_filter($roots, fn($prototype) => $prototype->parentid() === null)
+        );
+    }
+
+    /**
      * One course's name, for the entry the course menu gives it.
      *
      * Asked one course at a time, and only for the course that owns the
